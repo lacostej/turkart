@@ -17,18 +17,33 @@ const els = {};
 global.document = {
   getElementById: id => (els[id] = els[id] || mkEl()),
   createElement: () => mkEl(),
+  body: mkEl(),
+  activeElement: null,
 };
 global.navigator = { clipboard: { writeText(){} } };
 global.alert = () => {}; global.confirm = () => true; global.prompt = () => 'X';
 global.Blob = class {}; global.URL = { createObjectURL: () => '', revokeObjectURL(){} };
 global.setTimeout = () => {};
-global.window = { innerHeight: 900, addEventListener(){}, removeEventListener(){} };
+const winListeners = {};
+global.window = {
+  innerHeight: 900,
+  addEventListener(k, fn) { (winListeners[k] = winListeners[k] || []).push(fn); },
+  removeEventListener(k, fn) {
+    if (winListeners[k]) winListeners[k] = winListeners[k].filter(f => f !== fn);
+  },
+};
+// Drive a real pointer gesture against whatever the page registered.
+global.fireWindow = (k, ev) => (winListeners[k] || []).slice().forEach(fn => fn(ev));
 
 const gripEl = () => { const g = mkEl(); g.listeners = {};
-  g.addEventListener = (k, fn) => { (g.listeners[k] = g.listeners[k] || []).push(fn); }; return g; };
+  g.addEventListener = (k, fn) => { (g.listeners[k] = g.listeners[k] || []).push(fn); };
+  g.fire = (k, ev) => (g.listeners[k] || []).slice().forEach(fn => fn(ev));
+  return g; };
 const layer = () => ({ addTo(){ return this; }, clearLayers(){}, bindPopup(){ return this; }, setLatLngs(){},
   setLatLng(ll){ this._ll = ll; return this; },
-  on(){ return this; }, setStyle(){}, bringToFront(){},
+  on(k, fn) { (this._h = this._h || {}); (this._h[k] = this._h[k] || []).push(fn); return this; },
+  _fire(k, ev) { ((this._h || {})[k] || []).slice().forEach(fn => fn(ev)); return this; },
+  setStyle(){}, bringToFront(){},
   getElement(){ if (!this._el) { this._el = mkEl(); this._el._grip = gripEl();
       this._el.querySelector = sel => sel === '.grip' ? this._el._grip : null; } return this._el; },
   getLatLng: () => ({ lat: 1, lng: 2 }) });
@@ -44,6 +59,7 @@ global.L = {
     getCenter(){ this._check(); return {lat:1,lng:2}; },
     getZoom(){ return this._loaded ? 12 : undefined; },
     dragging: { enable(){}, disable(){} },
+    invalidateSize(){},
     _check(){ if (!this._loaded) throw new Error('Set map center and zoom first.'); },
     latLngToLayerPoint(ll){ this._check();
       return { x: (ll.lng ?? ll[1]) * 100000, y: -(ll.lat ?? ll[0]) * 100000 }; },

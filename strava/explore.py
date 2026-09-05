@@ -306,6 +306,30 @@ _TEMPLATE = r"""<!doctype html>
   .photo-pin img { width:100%; height:100%; object-fit:cover; border-radius:3px;
                    border:3px solid #fff; box-shadow:0 2px 6px rgba(0,0,0,.45); display:block; }
   .photo-pin.dragging { cursor:grabbing; }
+  /* Legend: a card over the map, so one screenshot captures both. */
+  #legend { position:absolute; z-index:900; left:24px; top:24px; width:310px;
+            background:rgba(255,255,255,.96); border-radius:8px; padding:16px 18px 14px;
+            box-shadow:0 4px 22px rgba(0,0,0,.22); font-size:13px; }
+  #legend h2 { margin:0 0 2px; font-size:19px; line-height:1.25; font-weight:700;
+               letter-spacing:-.01em; outline:none; }
+  #legend h2:empty::before { content:'Click to add a title'; color:#b9b9b2; }
+  #legend .period { margin:0 0 11px; font-size:11px; color:var(--muted);
+                    text-transform:uppercase; letter-spacing:.07em; }
+  #legend ol { list-style:none; margin:0; padding:0; }
+  #legend li { display:flex; gap:9px; align-items:baseline; padding:3px 0; }
+  #legend .num { flex:none; width:20px; height:20px; border-radius:50%; color:#fff;
+                 font-size:11px; font-weight:700; display:flex; align-items:center;
+                 justify-content:center; position:relative; top:3px; }
+  #legend .nm { flex:1; min-width:0; }
+  #legend .fig { color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap;
+                 font-size:12px; }
+  #legend .tot { margin-top:10px; padding-top:8px; border-top:1px solid var(--line);
+                 font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  #legend .grab { position:absolute; inset:0 0 auto 0; height:14px; cursor:grab; }
+  body.legendmode #sidebar { display:none; }
+  body.legendmode #legendbar { display:flex; }
+  #legendbar { display:none; position:absolute; z-index:901; right:10px; top:10px; gap:6px; }
+  #legendbar button { background:rgba(255,255,255,.95); }
   #zoomout { position:absolute; z-index:500; right:10px; bottom:22px; background:#fff;
              border:1px solid var(--line); border-radius:4px; padding:3px 7px;
              font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
@@ -343,6 +367,7 @@ _TEMPLATE = r"""<!doctype html>
     <button id="zoomSel">Zoom to selection</button>
     <button id="ghosts">Show unselected</button>
     <button id="leaders">Hide photo lines</button>
+    <button id="legendOn">Legend view</button>
     <label class="tog" style="margin-left:auto">size
       <input type="range" id="psize" min="40" max="220" step="4" style="width:90px">
     </label>
@@ -358,7 +383,20 @@ _TEMPLATE = r"""<!doctype html>
     </div>
   </div>
 </div>
-<div id="map"><div id="zoomout"></div></div>
+<div id="map">
+  <div id="zoomout"></div>
+  <div id="legend" hidden>
+    <div class="grab" id="legendGrab"></div>
+    <h2 id="legendTitle" contenteditable="true" spellcheck="false"></h2>
+    <p class="period" id="legendPeriod"></p>
+    <ol id="legendList"></ol>
+    <div class="tot" id="legendTotals"></div>
+  </div>
+  <div id="legendbar">
+    <button id="legendBack">&#8592; Back to selector</button>
+    <button id="legendElev">Hide elevation</button>
+  </div>
+</div>
 <img id="preview" alt="">
 
 <script>
@@ -371,7 +409,10 @@ const TAG_WITH_KIDS = 16;
 // ---------------------------------------------------------------- state
 // Multiple named selections. Each holds the chosen ride ids in order, plus
 // per-photo map positions, so a selection fully describes one poster layout.
-function blankSet(ids) { return { ids: ids || [], photos: {}, leaders: true, size: 72 }; }
+function blankSet(ids) {
+  return { ids: ids || [], photos: {}, leaders: true, size: 72,
+           title: '', showElev: true, legendPos: null };
+}
 
 // A placement is {pos:[lat,lng], size:px}. Early builds stored a bare [lat,lng],
 // so normalise on read rather than forcing anyone to redo their layout.
@@ -395,6 +436,8 @@ let state = loadState();
 function cur() {
   const set = state.sets[state.active] || (state.sets[state.active] = blankSet());
   if (set.leaders === undefined) set.leaders = true;
+  if (set.showElev === undefined) set.showElev = true;
+  if (set.title === undefined) set.title = '';
   if (!set.size) set.size = 72;
   return set;
 }
@@ -720,9 +763,11 @@ function render() {
       marker.on('dragend', () => {
         marker.getElement()?.classList.remove('dragging');
         const ll = marker.getLatLng();
-        cur().photos[r.id][photoId] = {
-          pos: [+ll.lat.toFixed(6), +ll.lng.toFixed(6)], size: place.size,
-        };
+        // Keep `place` in step with the store. A drag does not re-render, so a
+        // stale place.pos here is what later made a resize snap the photo back
+        // to wherever it sat before the drag.
+        place.pos = [+ll.lat.toFixed(6), +ll.lng.toFixed(6)];
+        cur().photos[r.id][photoId] = { pos: place.pos, size: place.size };
         save();
       });
       marker.bindPopup(
@@ -759,6 +804,10 @@ function render() {
             window.removeEventListener('pointermove', move);
             window.removeEventListener('pointerup', up);
             map.dragging.enable();
+            // Read the position off the marker rather than trusting `place`:
+            // the marker is the one thing a drag always leaves correct.
+            const ll = marker.getLatLng();
+            place.pos = [+ll.lat.toFixed(6), +ll.lng.toFixed(6)];
             cur().photos[r.id][photoId] = { pos: place.pos, size: place.size };
             save(); render();
           };
@@ -788,6 +837,7 @@ function render() {
   }
 
   layoutPins();
+  if (legendMode) renderLegend();
   document.getElementById('out').value = exportJson();
   document.getElementById('ghosts').textContent = showGhosts ? 'Hide unselected' : 'Show unselected';
   document.getElementById('leaders').textContent = cur().leaders ? 'Hide photo lines' : 'Show photo lines';
@@ -842,6 +892,66 @@ function layoutPins() {
       }).addTo(pinLinkLayer);
     }
   });
+}
+
+// ---------------------------------------------------------------- legend
+// The legend uses the same numbering and colours as the map, because the two
+// are read together: the circle beside a name is the pin out on the route.
+let legendMode = false;
+
+function renderLegend() {
+  const sel = selectedRides();
+  const set = cur();
+  const title = document.getElementById('legendTitle');
+  if (document.activeElement !== title) title.textContent = set.title || '';
+
+  const period = document.getElementById('legendPeriod');
+  period.textContent = sel.length
+    ? (sel.map(r => r.date).sort()[0] === sel.map(r => r.date).sort().slice(-1)[0]
+        ? fmtDate(sel[0].date)
+        : `${fmtDate(sel.map(r => r.date).sort()[0])} – ${fmtDate(sel.map(r => r.date).sort().slice(-1)[0])}`)
+    : '';
+
+  const list = document.getElementById('legendList');
+  list.innerHTML = '';
+  sel.forEach((r, i) => {
+    const li = document.createElement('li');
+    const figures = set.showElev
+      ? `${r.km.toFixed(1)} km · ${r.elev} m`
+      : `${r.km.toFixed(1)} km`;
+    li.innerHTML =
+      `<span class="num" style="background:${colour(i, sel.length)}">${i + 1}</span>` +
+      `<span class="nm"><b>${escapeHtml(r.name)}</b><br>` +
+      `<span class="fig">${fmtDate(r.date)} · ${figures}</span></span>`;
+    list.appendChild(li);
+  });
+
+  const km = sel.reduce((a, r) => a + r.km, 0);
+  const elev = sel.reduce((a, r) => a + r.elev, 0);
+  document.getElementById('legendTotals').textContent = sel.length
+    ? `${sel.length} rides · ${km.toFixed(0)} km` + (set.showElev ? ` · ${elev.toLocaleString()} m climbed` : '')
+    : 'nothing selected';
+
+  document.getElementById('legendElev').textContent =
+    set.showElev ? 'Hide elevation' : 'Show elevation';
+
+  const el = document.getElementById('legend');
+  if (set.legendPos) { el.style.left = set.legendPos[0] + 'px'; el.style.top = set.legendPos[1] + 'px'; }
+}
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${+d} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m - 1]} ${y}`;
+}
+
+function setLegendMode(on) {
+  legendMode = on;
+  document.body.classList.toggle('legendmode', on);
+  document.getElementById('legend').hidden = !on;
+  // The sidebar collapses in legend mode, so the map has to re-measure itself.
+  setTimeout(() => { map.invalidateSize(); layoutPins(); }, 0);
+  if (on) renderLegend();
 }
 
 function exportJson() {
@@ -917,6 +1027,47 @@ document.getElementById('invert').onclick = () => {
   });
   persist(); render();
 };
+document.getElementById('legendOn').onclick = () => setLegendMode(true);
+document.getElementById('legendBack').onclick = () => setLegendMode(false);
+document.getElementById('legendElev').onclick = () => {
+  cur().showElev = !cur().showElev; persist(); renderLegend();
+};
+
+const legendTitle = document.getElementById('legendTitle');
+legendTitle.addEventListener('input', () => {
+  cur().title = legendTitle.textContent.trim(); persist();
+});
+// Enter would insert a line break in a contenteditable; commit instead.
+legendTitle.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); legendTitle.blur(); }
+});
+
+// Drag the legend by its top strip, so it can be placed clear of the tracks.
+(() => {
+  const card = document.getElementById('legend');
+  const grab = document.getElementById('legendGrab');
+  grab.addEventListener('pointerdown', ev => {
+    ev.preventDefault();
+    const rect = card.getBoundingClientRect();
+    const mapBox = document.getElementById('map').getBoundingClientRect();
+    const offX = ev.clientX - rect.left, offY = ev.clientY - rect.top;
+    grab.style.cursor = 'grabbing';
+    const move = mv => {
+      card.style.left = (mv.clientX - mapBox.left - offX) + 'px';
+      card.style.top = (mv.clientY - mapBox.top - offY) + 'px';
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      grab.style.cursor = 'grab';
+      cur().legendPos = [parseInt(card.style.left, 10), parseInt(card.style.top, 10)];
+      persist();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  });
+})();
+
 document.getElementById('leaders').onclick = () => {
   cur().leaders = !cur().leaders; persist(); render();
 };

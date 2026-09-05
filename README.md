@@ -144,6 +144,15 @@ as good a poster backdrop. CyclOSM, Esri Topo and OpenTopoMap are also offered.
 
 CLI filters mirror the UI, e.g. `--tag 16 --sport-type-filter Ride --after 2026-01-01`.
 
+### Legend view
+
+**Legend view** hides the sidebar and puts a legend card on the map, so a single
+screenshot captures both. It carries an editable title, and each ride as a
+numbered circle in **the same colour as its pin on the map** — the circle beside
+a name is the pin out on the route — with name, date, distance and (optionally)
+elevation, plus totals. The card is draggable, and its title, position and the
+elevation toggle are stored per selection.
+
 ## Tests
 
 ```bash

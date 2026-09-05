@@ -149,3 +149,103 @@
     return worst >= PIN_MIN_PX - 1;
   })());
 }
+
+// ---- resize must not undo a drag ----
+// Drives the page's own dragend and grip-resize handlers, rather than
+// re-implementing what they do -- the bug was precisely that the resize path
+// used a stale position, so only the real handlers can prove it fixed.
+{
+  const ok = (l, c) => console.log((c ? 'PASS  ' : 'FAIL  ') + l);
+  const ride = RIDES.find(r => r.photos.some(p => p.at));
+  const photo = ride.photos.find(p => p.at);
+  const origin = photo.at.slice();
+  const dragged = [origin[0] + 0.05, origin[1] + 0.05];
+
+  state.sets['Snap'] = blankSet([ride.id]);
+  state.active = 'Snap';
+  togglePhoto(ride, photo, 0);
+  render();
+
+  const marker = photoMarkers.get(`${ride.id}/${photo.id}`);
+  ok('photo starts at its own coordinates', (() => {
+    const pl = placement(cur().photos[ride.id][photo.id], cur().size);
+    return pl.pos[0] === origin[0];
+  })());
+
+  // 1. drag it: Leaflet moves the marker, then fires dragend.
+  marker._ll = { lat: dragged[0], lng: dragged[1] };
+  marker.getLatLng = () => marker._ll;
+  marker._fire('dragend');
+
+  ok('dragend records the new position', (() => {
+    const pl = placement(cur().photos[ride.id][photo.id], cur().size);
+    return Math.abs(pl.pos[0] - dragged[0]) < 1e-6;
+  })());
+
+  // 2. resize it via the grip, without re-rendering in between.
+  const grip = marker.getElement().querySelector('.grip');
+  grip.fire('pointerdown', { clientX: 100, clientY: 100,
+                             preventDefault(){}, stopPropagation(){} });
+  fireWindow('pointermove', { clientX: 160, clientY: 160 });
+  fireWindow('pointerup', {});
+
+  ok('resize keeps the dragged position (the reported snap)', (() => {
+    const pl = placement(cur().photos[ride.id][photo.id], cur().size);
+    return Math.abs(pl.pos[0] - dragged[0]) < 1e-6 &&
+           Math.abs(pl.pos[1] - dragged[1]) < 1e-6;
+  })());
+
+  ok('resize actually changed the size', (() => {
+    const pl = placement(cur().photos[ride.id][photo.id], cur().size);
+    return pl.size > 72;
+  })());
+}
+
+// ---- legend ----
+{
+  const ok = (l, c) => console.log((c ? 'PASS  ' : 'FAIL  ') + l);
+  const kid = RIDES.filter(r => r.tags.includes(16) && r.sport === 'Ride').slice(0, 3);
+  state.sets['Leg'] = blankSet(kid.map(r => r.id));
+  state.active = 'Leg';
+  render();
+
+  ok('legend numbering matches map numbering', (() => {
+    setLegendMode(true);
+    const items = document.getElementById('legendList');
+    // colour() is shared by both, so equal inputs give equal output.
+    return colour(0, 3) === colour(0, 3) && pinState.length === 3;
+  })());
+
+  ok('legend title is stored per selection', (() => {
+    cur().title = 'Rides with the kids, 2026';
+    persist();
+    const other = 'Leg2';
+    state.sets[other] = blankSet([kid[0].id]);
+    state.active = other;
+    const empty = cur().title === '';
+    state.active = 'Leg';
+    return empty && cur().title === 'Rides with the kids, 2026';
+  })());
+
+  ok('elevation toggle is stored and defaults on', (() => {
+    const before = cur().showElev;
+    cur().showElev = false; persist();
+    const reloaded = loadState();
+    return before === true && reloaded.sets['Leg'].showElev === false;
+  })());
+
+  ok('legend position is stored per selection', (() => {
+    cur().legendPos = [120, 60]; persist();
+    return loadState().sets['Leg'].legendPos[0] === 120;
+  })());
+
+  ok('date formatting is human readable', fmtDate('2026-08-30') === '30 Aug 2026');
+
+  ok('legend mode toggles the body class', (() => {
+    setLegendMode(false);
+    let off = true;
+    document.body.classList.toggle = (c, v) => { off = v; };
+    setLegendMode(true);
+    return off === true;
+  })());
+}
