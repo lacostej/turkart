@@ -72,7 +72,22 @@ folded in when the page is built: `distance` and `time` are cumulative per
 activity, so they get re-accumulated, and the straight-line hop across the gap
 is added to the total rather than dropped.
 
-## 4. Select
+## 4. Photos
+
+```bash
+python -m strava photos sync --tag 16   # scan rides, download stills
+python -m strava photos list
+```
+
+There is no JSON endpoint — `/activities/<id>/photos` is a 404. The media lives
+in the activity *page*, as the serialised props of a `MediaThumbnailList` React
+component, so this is a scrape and says so loudly if the markup stops matching.
+
+Stills land in `data/photos/<activity_id>/` at full resolution (1500×2000 here).
+Videos are recorded in the index but not downloaded — only their HLS URL exists.
+A merged ride inherits the media of every activity it absorbed.
+
+## 5. Select
 
 ```bash
 python -m strava explore --open            # file://
@@ -84,19 +99,31 @@ CDN) — it runs off the filesystem, so your GPS traces are never uploaded anywh
 
 ### Basemaps
 
-Defaults to **CARTO Light**; a layer switcher (top right) offers Voyager, Dark,
-and Esri Topo. The muted CARTO styles are the better backdrop for coloured tracks
-anyway, and they matter for a poster.
+Two constraints shape the choice, both found the hard way:
 
-`tile.openstreetmap.org` is also offered but **only works under `--serve`**:
-[OSM blocks tile requests that arrive without a `Referer`][osm-blocked], and a
-page opened over `file://` sends none — which is why it 403s there. Serving over
-localhost gives the page a real origin and the OSM layer starts working.
+- **CARTO needs an API key.** Without one its tiles return HTTP 200, a normal
+  byte count, and a real map — with `API KEY REQUIRED` watermarked across it.
+  Only looking at the image reveals this. Put a key in `.secrets/carto` (or
+  `$CARTO_KEY`) and **Carto Positron** becomes the default: near-colourless, so
+  the tracks carry the image. `--no-carto` builds without it.
+- **osm.org blocks requests with no `Referer`** ([why][osm-blocked]), which is
+  exactly what a `file://` page sends. Its layer works under `--serve`.
+
+Keyless fallback is **Esri Light Gray Canvas**, which needs nothing and is nearly
+as good a poster backdrop. CyclOSM, Esri Topo and OpenTopoMap are also offered.
+
+> The built page embeds the CARTO key, so `build/` is gitignored. Use
+> `--no-carto` for a build you intend to share.
 
 [osm-blocked]: https://wiki.openstreetmap.org/wiki/Blocked_tiles
 
 - Filter by date, distance, text, **With kids only**, **Rides only**
-- Click rides to select; selection persists in `localStorage`
+- **Multiple named selections**, each an independent poster layout — create,
+  duplicate, rename, delete from the bar at the top. Order of selection is the
+  order on the poster, and is preserved rather than sorted.
+- **Photos per ride**: a selected ride with media shows a thumbnail strip; click
+  a photo to place it on the map, then **drag it anywhere**. Positions are stored
+  per selection, so two layouts can arrange the same photos differently.
 - Selected rides are numbered and colour-coded on the map and in the list.
   Numbers sit at each ride's **turnaround** (its furthest point from the start),
   not at the start — every ride leaves from home, so start-anchored labels stack
@@ -116,6 +143,7 @@ CLI filters mirror the UI, e.g. `--tag 16 --sport-type-filter Ride --after 2026-
 | `strava/store.py` | `data/` cache, atomic writes |
 | `strava/geo.py` | RDP simplification, bounding boxes, ride clustering |
 | `strava/merge.py` | detect and fold together split recordings |
+| `strava/photos.py` | scrape and download ride media |
 | `strava/explore.py` | builds the selector page |
 | `strava/cli.py` | command line |
 
@@ -125,7 +153,8 @@ ride can be measured without reloading full-resolution data.
 
 ## Not built yet
 
-- **Poster renderer** — the end goal.
+- **Poster renderer** — the end goal. Selections export as JSON with ride
+  order, per-ride stats and photo positions, which is its input.
 - **Partial rides** — cut a ride at a chosen point and include only part of it
   (the groundwork is in: per-point distance/altitude is already embedded).
 - **Patching** a recording that dropped out mid-ride (merging is done).

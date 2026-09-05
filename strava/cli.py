@@ -86,6 +86,21 @@ def main(argv: list[str] | None = None) -> int:
     rm = mrg.add_parser("remove", help="undo a saved merge")
     rm.add_argument("ids", nargs="+", type=int, help="any member id of the merge")
 
+    # -- photos -------------------------------------------------------------
+    pho = sub.add_parser("photos", help="ride photos and videos").add_subparsers(
+        dest="command", required=True
+    )
+    psync = pho.add_parser("sync", help="find and download media for indexed rides")
+    psync.add_argument("--after", type=_parse_date)
+    psync.add_argument("--before", type=_parse_date)
+    psync.add_argument("--tag", action="append", type=int)
+    psync.add_argument("--sport-type-filter", action="append", metavar="TYPE")
+    psync.add_argument("--ids", nargs="*", type=int)
+    psync.add_argument("--limit", type=int, default=0)
+    psync.add_argument("--refresh", action="store_true",
+                       help="re-scan activities already in the photo index")
+    pho.add_parser("list", help="show what media is indexed")
+
     # -- explore ------------------------------------------------------------
     exp = sub.add_parser("explore", help="build the local ride browser")
     exp.set_defaults(command="build")
@@ -93,6 +108,8 @@ def main(argv: list[str] | None = None) -> int:
     exp.add_argument("--tolerance", type=float, default=8.0,
                      help="track simplification tolerance in metres (default: 8)")
     exp.add_argument("--open", action="store_true", help="open it in the browser when done")
+    exp.add_argument("--no-carto", action="store_true",
+                     help="ignore the CARTO key and use the keyless Esri basemap")
     exp.add_argument("--serve", nargs="?", type=int, const=8000, metavar="PORT",
                      help="serve it over http://localhost instead of file:// (default port 8000). "
                           "osm.org blocks tiles requested without a Referer, which file:// pages "
@@ -341,11 +358,83 @@ def _merge_remove(args, store: Store) -> int:
     return 0
 
 
+# ------------------------------------------------------------------- photos
+
+
+def _photos_sync(args, store: Store) -> int:
+    from .photos import download, fetch_media, load_index, save_index
+
+    targets = [{"id": i} for i in args.ids] if args.ids else _select_activities(store, args)
+    targets = [t for t in targets if t.get("has_latlng") is not False]
+    index = load_index(store)
+    if not args.refresh:
+        targets = [t for t in targets if str(t["id"]) not in index]
+    if args.limit:
+        targets = targets[: args.limit]
+
+    if not targets:
+        print("nothing to scan (all activities already in the photo index)")
+        return 0
+
+    print(f"scanning {len(targets)} activities for media")
+    client = StravaClient(BrowserSession.load())
+    found = saved = videos = 0
+    for n, target in enumerate(targets, 1):
+        activity_id = int(target["id"])
+        try:
+            media = fetch_media(client, activity_id)
+        except StravaError as exc:
+            print(f"  [{n}/{len(targets)}] {activity_id} FAILED: {exc}", file=sys.stderr)
+            continue
+
+        index[str(activity_id)] = [
+            {
+                "photo_id": m.photo_id, "media_type": m.media_type,
+                "caption": m.caption, "url": m.url, "video_url": m.video_url,
+                "is_video": m.is_video,
+            }
+            for m in media
+        ]
+        if not media:
+            continue
+        found += len(media)
+        for item in media:
+            if item.is_video:
+                videos += 1
+                continue
+            try:
+                if download(client, item, store):
+                    saved += 1
+            except StravaError as exc:
+                print(f"      photo {item.photo_id} failed: {exc}", file=sys.stderr)
+        name = target.get("name", "")
+        print(f"  [{n}/{len(targets)}] {activity_id} {name[:34]:34s} {len(media)} item(s)")
+
+    save_index(store, index)
+    print(f"\n{found} media item(s): {saved} photo(s) downloaded, {videos} video(s) indexed only")
+    return 0
+
+
+def _photos_list(args, store: Store) -> int:
+    from .photos import load_index, photo_dir
+
+    index = load_index(store)
+    activities = store.load_activities()
+    withmedia = {k: v for k, v in index.items() if v}
+    for activity_id, items in sorted(withmedia.items()):
+        name = activities.get(activity_id, {}).get("name", "?")
+        on_disk = len(list(photo_dir(store, int(activity_id)).glob("*.jpg")))
+        kinds = f"{sum(1 for i in items if not i['is_video'])} photo, {sum(1 for i in items if i['is_video'])} video"
+        print(f"  {activity_id}  {kinds:20s} {on_disk} on disk  {name[:40]}")
+    print(f"\n{len(withmedia)} of {len(index)} scanned activities have media")
+    return 0
+
+
 # ------------------------------------------------------------------ explore
 
 
 def _explore_build(args, store: Store) -> int:
-    from .explore import build_rides, summarise, write_html
+    from .explore import build_rides, load_carto_key, summarise, write_html
 
     wanted = {int(r["id"]) for r in _select_activities(store, args)}
     # A merge collapses its members into the first id; keep the survivor when a
@@ -361,7 +450,8 @@ def _explore_build(args, store: Store) -> int:
         print("no rides with tracks on disk -- run 'strava streams fetch' first")
         return 1
 
-    path = write_html(rides, args.output)
+    carto_key = None if args.no_carto else load_carto_key()
+    path = write_html(rides, args.output, carto_key=carto_key)
     stats = summarise(rides)
     raw_points = sum(r["points"] for r in rides)
     kept = sum(len(r["track"]) for r in rides)
@@ -375,7 +465,8 @@ def _explore_build(args, store: Store) -> int:
             f"  {i}. {group['size']:3d} rides  {width:5.0f} x {height:<5.0f} km  "
             f"{group['first']}..{group['last']}  ({group['label'][:34]})"
         )
-    print(f"\nwrote {path} ({path.stat().st_size / 1e6:.1f} MB) -- open it in a browser")
+    basemap = "Carto Positron" if carto_key else "Esri Light Gray (no CARTO key)"
+    print(f"\nwrote {path} ({path.stat().st_size / 1e6:.1f} MB), basemap: {basemap}")
 
     if args.serve:
         return _serve(path, args.serve, open_browser=args.open)
@@ -508,6 +599,8 @@ _HANDLERS = {
     ("merge", "apply"): _merge_apply,
     ("merge", "list"): _merge_list,
     ("merge", "remove"): _merge_remove,
+    ("photos", "sync"): _photos_sync,
+    ("photos", "list"): _photos_list,
     ("explore", "build"): _explore_build,
 }
 
