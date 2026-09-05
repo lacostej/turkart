@@ -391,7 +391,8 @@ def _photos_sync(args, store: Store) -> int:
             {
                 "photo_id": m.photo_id, "media_type": m.media_type,
                 "caption": m.caption, "url": m.url, "video_url": m.video_url,
-                "is_video": m.is_video,
+                "is_video": m.is_video, "lat": m.lat, "lng": m.lng,
+                "width": m.width, "height": m.height,
             }
             for m in media
         ]

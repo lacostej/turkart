@@ -49,6 +49,16 @@ class Media:
     caption: str
     url: str | None       # best still image available
     video_url: str | None  # HLS playlist, when the item is a video
+    # Where the photo was taken. Strava carries this per item, so a photo can be
+    # tied back to the point on the route it belongs to.
+    lat: float | None = None
+    lng: float | None = None
+    width: int | None = None
+    height: int | None = None
+
+    @property
+    def has_location(self) -> bool:
+        return self.lat is not None and self.lng is not None
 
     @property
     def is_video(self) -> bool:
@@ -81,6 +91,7 @@ def extract_media(page_html: str, activity_id: int) -> list[Media]:
 
     media = []
     for item in items:
+        dims = (item.get("dimensions") or {}).get("large") or {}
         media.append(
             Media(
                 photo_id=str(item.get("photo_id") or item.get("id")),
@@ -90,9 +101,20 @@ def extract_media(page_html: str, activity_id: int) -> list[Media]:
                 # `large` and `thumbnail` are often the same URL; prefer large.
                 url=item.get("large") or item.get("thumbnail"),
                 video_url=item.get("video"),
+                lat=_as_float(item.get("lat")),
+                lng=_as_float(item.get("lng")),
+                width=dims.get("width"),
+                height=dims.get("height"),
             )
         )
     return media
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def fetch_media(client: StravaClient, activity_id: int) -> list[Media]:

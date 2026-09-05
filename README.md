@@ -83,6 +83,9 @@ There is no JSON endpoint — `/activities/<id>/photos` is a 404. The media live
 in the activity *page*, as the serialised props of a `MediaThumbnailList` React
 component, so this is a scrape and says so loudly if the markup stops matching.
 
+Each item also carries `lat`/`lng` and pixel dimensions, so a photo can be tied
+back to the point on the route where it was taken.
+
 Stills land in `data/photos/<activity_id>/` at full resolution (1500×2000 here).
 Videos are recorded in the index but not downloaded — only their HLS URL exists.
 A merged ride inherits the media of every activity it absorbed.
@@ -121,9 +124,16 @@ as good a poster backdrop. CyclOSM, Esri Topo and OpenTopoMap are also offered.
 - **Multiple named selections**, each an independent poster layout — create,
   duplicate, rename, delete from the bar at the top. Order of selection is the
   order on the poster, and is preserved rather than sorted.
-- **Photos per ride**: a selected ride with media shows a thumbnail strip; click
-  a photo to place it on the map, then **drag it anywhere**. Positions are stored
-  per selection, so two layouts can arrange the same photos differently.
+- **Photos per ride**: a selected ride with media shows a thumbnail strip.
+  **Hover** a thumbnail for a large preview — no need to place a photo just to
+  see what it is. Click to place it on the map, then **drag it anywhere**.
+- Each placed photo keeps a **leader line back to where it was taken** (Strava
+  records per-photo coordinates; 83 of 86 here have them). *Hide photo lines*
+  turns them off for the whole selection. A photo with no GPS fix gets no line.
+- **Resize** a photo by its corner grip, or every photo at once with the *size*
+  slider. Aspect ratio is preserved from the real image dimensions.
+- Positions, sizes and the line toggle are stored per selection, so two layouts
+  can arrange the same photos completely differently.
 - Selected rides are numbered and colour-coded on the map and in the list.
   Numbers sit at each ride's **turnaround** (its furthest point from the start),
   not at the start — every ride leaves from home, so start-anchored labels stack

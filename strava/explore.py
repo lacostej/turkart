@@ -102,9 +102,17 @@ def build_rides(
                     continue
                 rel = f"photos/{member}/{item['photo_id']}.jpg"
                 if (store.root / rel).exists():
+                    # `at` is where the photo was taken; a few have no fix, and
+                    # those simply get no leader line back to the route.
+                    at = (
+                        [round(item["lat"], 6), round(item["lng"], 6)]
+                        if item.get("lat") is not None and item.get("lng") is not None
+                        else None
+                    )
                     photos.append(
                         {"id": item["photo_id"], "src": rel,
-                         "caption": item.get("caption") or ""}
+                         "caption": item.get("caption") or "", "at": at,
+                         "w": item.get("width"), "h": item.get("height")}
                     )
 
         rides.append(
@@ -277,6 +285,13 @@ _TEMPLATE = r"""<!doctype html>
   .strip img { width:46px; height:46px; object-fit:cover; border-radius:4px; cursor:pointer;
                border:2px solid transparent; opacity:.5; flex:none; }
   .strip img.on { opacity:1; border-color:var(--accent); }
+  .strip img:hover { opacity:1; }
+  #preview { position:fixed; z-index:2000; pointer-events:none; display:none;
+             border:3px solid #fff; border-radius:5px; box-shadow:0 6px 24px rgba(0,0,0,.45);
+             max-width:340px; max-height:340px; background:#fff; }
+  .photo-pin .grip { position:absolute; right:-5px; bottom:-5px; width:14px; height:14px;
+                     background:#fff; border:2px solid var(--accent); border-radius:50%;
+                     cursor:nwse-resize; box-shadow:0 1px 3px rgba(0,0,0,.4); }
   .strip .cnt { font-size:10px; color:var(--muted); align-self:center; white-space:nowrap; }
   #export { padding:9px 16px; border-top:1px solid var(--line); background:#fbfbfa; }
   #export textarea { width:100%; height:50px; font:11px/1.4 ui-monospace, Menlo, monospace;
@@ -327,6 +342,10 @@ _TEMPLATE = r"""<!doctype html>
     <button id="invert">Invert</button>
     <button id="zoomSel">Zoom to selection</button>
     <button id="ghosts">Show unselected</button>
+    <button id="leaders">Hide photo lines</button>
+    <label class="tog" style="margin-left:auto">size
+      <input type="range" id="psize" min="40" max="220" step="4" style="width:90px">
+    </label>
   </div>
   <div id="stats"></div>
   <div id="list"></div>
@@ -340,6 +359,7 @@ _TEMPLATE = r"""<!doctype html>
   </div>
 </div>
 <div id="map"><div id="zoomout"></div></div>
+<img id="preview" alt="">
 
 <script>
 const RIDES = __RIDES__;
@@ -351,7 +371,14 @@ const TAG_WITH_KIDS = 16;
 // ---------------------------------------------------------------- state
 // Multiple named selections. Each holds the chosen ride ids in order, plus
 // per-photo map positions, so a selection fully describes one poster layout.
-function blankSet(ids) { return { ids: ids || [], photos: {} }; }
+function blankSet(ids) { return { ids: ids || [], photos: {}, leaders: true, size: 72 }; }
+
+// A placement is {pos:[lat,lng], size:px}. Early builds stored a bare [lat,lng],
+// so normalise on read rather than forcing anyone to redo their layout.
+function placement(value, fallbackSize) {
+  if (Array.isArray(value)) return { pos: value, size: fallbackSize };
+  return { pos: value.pos, size: value.size || fallbackSize };
+}
 
 function loadState() {
   try {
@@ -365,7 +392,12 @@ function loadState() {
 }
 
 let state = loadState();
-function cur() { return state.sets[state.active] || (state.sets[state.active] = blankSet()); }
+function cur() {
+  const set = state.sets[state.active] || (state.sets[state.active] = blankSet());
+  if (set.leaders === undefined) set.leaders = true;
+  if (!set.size) set.size = 72;
+  return set;
+}
 function persist() {
   try { localStorage.setItem(STORAGE, JSON.stringify(state)); } catch (e) {}
 }
@@ -374,6 +406,7 @@ function selectedSet() { return new Set(cur().ids); }
 let showGhosts = false;
 const drawn = new Map();          // ride id -> {line, pin}
 const photoMarkers = new Map();   // "rideId/photoId" -> marker
+const stripScroll = new Map();    // ride id -> horizontal scroll of its photo strip
 
 // ---------------------------------------------------------------- map
 const map = L.map('map', { preferCanvas: true, zoomSnap: 0.25, zoomDelta: 0.25, maxZoom: 20 });
@@ -425,6 +458,19 @@ function fmtDuration(s) {
   const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
   return h ? `${h}h${String(m).padStart(2, '0')}` : `${m}min`;
 }
+const previewEl = document.getElementById('preview');
+function showPreview(photo, anchor) {
+  previewEl.src = photo.src;
+  previewEl.style.display = 'block';
+  const box = anchor.getBoundingClientRect();
+  // Sit beside the sidebar, vertically centred on the thumbnail, clamped to
+  // the viewport so a photo near the bottom is still fully visible.
+  const top = Math.min(Math.max(8, box.top + box.height / 2 - 170), window.innerHeight - 348);
+  previewEl.style.left = (box.right + 12) + 'px';
+  previewEl.style.top = top + 'px';
+}
+function hidePreview() { previewEl.style.display = 'none'; }
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -498,9 +544,17 @@ function togglePhoto(ride, photo, index) {
   const photos = cur().photos;
   const forRide = photos[ride.id] || (photos[ride.id] = {});
   if (forRide[photo.id]) delete forRide[photo.id];
-  else forRide[photo.id] = defaultPos(ride, index);
+  // Start a geolocated photo at its own coordinates; the leader line is then
+  // zero-length until it is dragged clear of the route.
+  else forRide[photo.id] = { pos: photo.at || defaultPos(ride, index), size: cur().size };
   if (!Object.keys(forRide).length) delete photos[ride.id];
   persist(); render();
+}
+
+// Keep the photo's aspect ratio: `size` is the long edge in pixels.
+function photoBox(photo, size) {
+  const w = photo.w || 4, h = photo.h || 3;
+  return w >= h ? [size, Math.round(size * h / w)] : [Math.round(size * w / h), size];
 }
 
 function highlight(id, on) {
@@ -533,6 +587,8 @@ function render() {
 
   // ---- list
   const list = document.getElementById('list');
+  const listTop = list.scrollTop;
+  const restore = [];
   list.innerHTML = '';
   for (const r of vis) {
     const on = chosen.has(r.id);
@@ -568,16 +624,28 @@ function render() {
         img.title = ph.caption || 'click to place on map';
         if (placed[ph.id]) img.classList.add('on');
         img.onclick = e => { e.stopPropagation(); togglePhoto(r, ph, i); };
+        // Hovering shows the photo large, so browsing does not mean placing and
+        // unplacing just to see what a thumbnail actually is.
+        img.onmouseenter = e => showPreview(ph, e.currentTarget);
+        img.onmouseleave = hidePreview;
         strip.appendChild(img);
       });
       const cnt = document.createElement('span');
       cnt.className = 'cnt';
       cnt.textContent = `${Object.keys(placed).length}/${r.photos.length} placed`;
       strip.appendChild(cnt);
+      // A re-render rebuilds these nodes, which would otherwise snap the strip
+      // back to the left every time a photo is clicked.
+      strip.dataset.ride = r.id;
+      strip.addEventListener('scroll', () => { stripScroll.set(r.id, strip.scrollLeft); });
       block.appendChild(strip);
+      if (stripScroll.has(r.id)) restore.push([strip, stripScroll.get(r.id)]);
     }
     list.appendChild(block);
   }
+  // Re-apply scroll offsets after the new nodes are in the document.
+  list.scrollTop = listTop;
+  for (const [el, left] of restore) el.scrollLeft = left;
 
   // ---- map
   trackLayer.clearLayers();
@@ -610,27 +678,82 @@ function render() {
     pin.bindPopup(popup);
     drawn.set(r.id, { line, pin });
 
-    // Placed photos: draggable, position saved per selection on drop.
+    // Placed photos: draggable, resizable, each tied back to where it was taken.
     const placed = cur().photos[r.id] || {};
-    for (const [photoId, pos] of Object.entries(placed)) {
+    for (const [photoId, stored] of Object.entries(placed)) {
       const photo = r.photos.find(p => p.id === photoId);
       if (!photo) continue;
-      const marker = L.marker(pos, {
+      const place = placement(stored, cur().size);
+      const [pw, ph] = photoBox(photo, place.size);
+
+      // Leader line back to the photo's own coordinates. Photos with no GPS fix
+      // get no line -- there is nowhere truthful to point it.
+      let leader = null, anchor = null;
+      if (photo.at && cur().leaders) {
+        leader = L.polyline([place.pos, photo.at], {
+          color: col, weight: 1.5, opacity: .85, dashArray: '4,3', interactive: false,
+        }).addTo(photoLayer);
+        anchor = L.circleMarker(photo.at, {
+          radius: 3, color: col, fillColor: '#fff', fillOpacity: 1, weight: 2, interactive: false,
+        }).addTo(photoLayer);
+      }
+
+      const marker = L.marker(place.pos, {
         draggable: true, zIndexOffset: 2000,
-        icon: L.divIcon({ className: 'photo-pin', iconSize: [64, 64], iconAnchor: [32, 32],
-                          html: `<img src="${photo.src}" style="border-color:${col}">` }),
+        icon: L.divIcon({
+          className: 'photo-pin', iconSize: [pw, ph], iconAnchor: [pw / 2, ph / 2],
+          html: `<img src="${photo.src}" style="border-color:${col}"><div class="grip"></div>`,
+        }),
       }).addTo(photoLayer);
+
+      const save = () => {
+        persist();
+        document.getElementById('out').value = exportJson();
+      };
       marker.on('dragstart', () => marker.getElement()?.classList.add('dragging'));
+      marker.on('drag', () => { if (leader) leader.setLatLngs([marker.getLatLng(), photo.at]); });
       marker.on('dragend', () => {
         marker.getElement()?.classList.remove('dragging');
         const ll = marker.getLatLng();
-        cur().photos[r.id][photoId] = [+ll.lat.toFixed(6), +ll.lng.toFixed(6)];
-        persist();
-        document.getElementById('out').value = exportJson();
+        cur().photos[r.id][photoId] = {
+          pos: [+ll.lat.toFixed(6), +ll.lng.toFixed(6)], size: place.size,
+        };
+        save();
       });
       marker.bindPopup(
         `<img src="${photo.src}" style="max-width:260px;display:block;margin-bottom:6px">` +
-        `${escapeHtml(photo.caption || r.name)}<br><small>drag to reposition</small>`);
+        `${escapeHtml(photo.caption || r.name)}<br>` +
+        `<small>drag to move · corner grip to resize` +
+        `${photo.at ? '' : ' · no GPS fix, so no line'}</small>`);
+
+      // Corner grip resizes. Pointer events are taken off the map so a drag here
+      // never pans it, and the size is written straight into the placement.
+      const el = marker.getElement();
+      const grip = el && el.querySelector('.grip');
+      if (grip) {
+        grip.addEventListener('pointerdown', ev => {
+          ev.preventDefault(); ev.stopPropagation();
+          map.dragging.disable();
+          const startX = ev.clientX, startY = ev.clientY, startSize = place.size;
+          const move = mv => {
+            const delta = Math.max(mv.clientX - startX, mv.clientY - startY);
+            const next = Math.round(Math.min(400, Math.max(32, startSize + delta)));
+            place.size = next;
+            const [nw, nh] = photoBox(photo, next);
+            el.style.width = nw + 'px'; el.style.height = nh + 'px';
+            el.style.marginLeft = (-nw / 2) + 'px'; el.style.marginTop = (-nh / 2) + 'px';
+          };
+          const up = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+            map.dragging.enable();
+            cur().photos[r.id][photoId] = { pos: place.pos, size: place.size };
+            save(); render();
+          };
+          window.addEventListener('pointermove', move);
+          window.addEventListener('pointerup', up);
+        });
+      }
       photoMarkers.set(`${r.id}/${photoId}`, marker);
     }
   });
@@ -654,6 +777,8 @@ function render() {
 
   document.getElementById('out').value = exportJson();
   document.getElementById('ghosts').textContent = showGhosts ? 'Hide unselected' : 'Show unselected';
+  document.getElementById('leaders').textContent = cur().leaders ? 'Hide photo lines' : 'Show photo lines';
+  document.getElementById('psize').value = cur().size;
 }
 
 function exportJson() {
@@ -662,7 +787,11 @@ function exportJson() {
     name: state.active,
     rides: sel.map((r, i) => ({
       order: i + 1, id: r.id, name: r.name, date: r.date, km: r.km, elev: r.elev,
-      photos: Object.entries(cur().photos[r.id] || {}).map(([id, pos]) => ({ id, pos })),
+      photos: Object.entries(cur().photos[r.id] || {}).map(([id, v]) => {
+        const pl = placement(v, cur().size);
+        const photo = r.photos.find(p => p.id === id);
+        return { id, pos: pl.pos, size: pl.size, taken_at: photo ? photo.at : null };
+      }),
     })),
   }, null, 2);
 }
@@ -722,13 +851,29 @@ document.getElementById('invert').onclick = () => {
   });
   persist(); render();
 };
+document.getElementById('leaders').onclick = () => {
+  cur().leaders = !cur().leaders; persist(); render();
+};
+const psize = document.getElementById('psize');
+psize.oninput = () => {
+  // Resize every placed photo in this selection, and set the default for new ones.
+  const size = +psize.value;
+  cur().size = size;
+  for (const forRide of Object.values(cur().photos))
+    for (const id of Object.keys(forRide))
+      forRide[id] = { pos: placement(forRide[id], size).pos, size };
+  persist(); render();
+};
 document.getElementById('zoomSel').onclick = () => fitTo(selectedRides());
 document.getElementById('ghosts').onclick = () => { showGhosts = !showGhosts; render(); };
 document.getElementById('resetPhotos').onclick = () => {
   for (const r of selectedRides()) {
     const placed = cur().photos[r.id];
     if (!placed) continue;
-    Object.keys(placed).forEach((pid, i) => { placed[pid] = defaultPos(r, i); });
+    Object.keys(placed).forEach((pid, i) => {
+      const photo = r.photos.find(p => p.id === pid);
+      placed[pid] = { pos: (photo && photo.at) || defaultPos(r, i), size: cur().size };
+    });
   }
   persist(); render();
 };
