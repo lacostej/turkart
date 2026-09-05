@@ -43,7 +43,36 @@ Fetching is the only step that needs credentials; every later step is offline.
 
 Fetches are paced at ~1 req/sec. Rides with `has_latlng: false` are skipped.
 
-## 3. Select
+## 3. Repair split recordings
+
+A ride stopped and restarted mid-outing lands in Strava as two activities. On a
+poster they read as two separate loops from home, and get double-counted.
+
+```bash
+python -m strava merge suggest            # detect, with evidence
+python -m strava merge suggest --apply    # accept them all
+python -m strava merge apply <idA> <idB> --name "..."
+python -m strava merge list / remove <id>
+```
+
+Detection takes **two** tests, and the second is the one that matters:
+
+1. the second activity starts near where the first ended, soon after — and
+2. that junction is **far from where the first ride began**.
+
+Test 1 alone is badly insufficient: a ride ending at home followed by another
+starting at home also has a tiny junction gap. On this data that paired a ride
+*with kids* to a later *solo* ride purely because both touched home. Requiring
+the junction to sit out on the route (≥2 km from the start, `--min-junction`)
+removes those while keeping real splits, whose junctions are 10 km+ out.
+
+Merges are stored in `data/merges.json` as *intent* — just member ids. The
+original streams are never rewritten, so a merge is always reversible. They are
+folded in when the page is built: `distance` and `time` are cumulative per
+activity, so they get re-accumulated, and the straight-line hop across the gap
+is added to the total rather than dropped.
+
+## 4. Select
 
 ```bash
 python -m strava explore --open            # file://
@@ -68,7 +97,10 @@ localhost gives the page a real origin and the OSM layer starts working.
 
 - Filter by date, distance, text, **With kids only**, **Rides only**
 - Click rides to select; selection persists in `localStorage`
-- Selected rides are numbered and colour-coded on the map and in the list
+- Selected rides are numbered and colour-coded on the map and in the list.
+  Numbers sit at each ride's **turnaround** (its furthest point from the start),
+  not at the start — every ride leaves from home, so start-anchored labels stack
+  on one pixel. Hovering a row thickens its track and enlarges its pin.
 - The stats bar reports whether the selection **fits on one map**, or how many
   sheets it needs (rides more than 40 km apart get their own)
 - **Save selection.json** exports the chosen ids, in order
@@ -83,6 +115,7 @@ CLI filters mirror the UI, e.g. `--tag 16 --sport-type-filter Ride --after 2026-
 | `strava/client.py` | the internal endpoints, paced and error-mapped |
 | `strava/store.py` | `data/` cache, atomic writes |
 | `strava/geo.py` | RDP simplification, bounding boxes, ride clustering |
+| `strava/merge.py` | detect and fold together split recordings |
 | `strava/explore.py` | builds the selector page |
 | `strava/cli.py` | command line |
 
@@ -95,4 +128,4 @@ ride can be measured without reloading full-resolution data.
 - **Poster renderer** — the end goal.
 - **Partial rides** — cut a ride at a chosen point and include only part of it
   (the groundwork is in: per-point distance/altitude is already embedded).
-- **Repairs** — merging two rides, patching a broken recording.
+- **Patching** a recording that dropped out mid-ride (merging is done).

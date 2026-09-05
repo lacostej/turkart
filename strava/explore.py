@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .geo import bounds, cluster, haversine_km, simplify_indices, span_km
+from .merge import apply_to
 from .store import Store
 
 DEFAULT_OUTPUT = Path("build/explore.html")
@@ -30,15 +31,20 @@ def build_rides(
     stage can read distance and elevation for a sub-range of a ride without
     reloading the full-resolution streams.
     """
-    activities = store.load_activities()
+    # Saved merges are folded in here rather than on disk, so the original
+    # per-activity streams stay intact and a merge stays reversible.
+    activities, merged = apply_to(store, store.load_activities())
     rides: list[dict] = []
 
     for key, raw in activities.items():
         if only_ids is not None and int(raw["id"]) not in only_ids:
             continue
-        if not store.has_streams(key):
+        if int(raw["id"]) in merged:
+            streams = merged[int(raw["id"])]
+        elif store.has_streams(key):
+            streams = store.load_streams(key)
+        else:
             continue
-        streams = store.load_streams(key)
         latlng = streams.get("latlng") or []
         if not latlng:
             continue
@@ -87,6 +93,7 @@ def build_rides(
                 "desc": (raw.get("description") or "")[:300],
                 "url": f"https://www.strava.com/activities/{raw['id']}",
                 "points": len(latlng),
+                "merged_from": raw.get("merged_from") or [],
                 "centre": [
                     round((box[0] + box[2]) / 2, 5),
                     round((box[1] + box[3]) / 2, 5),

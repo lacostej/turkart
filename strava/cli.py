@@ -66,6 +66,26 @@ def main(argv: list[str] | None = None) -> int:
     fetch.add_argument("--sport-type-filter", action="append", metavar="TYPE")
     fetch.add_argument("--limit", type=int, default=0)
 
+    # -- merge --------------------------------------------------------------
+    mrg = sub.add_parser("merge", help="join rides split by a broken recording").add_subparsers(
+        dest="command", required=True
+    )
+    sug = mrg.add_parser("suggest", help="find likely split recordings")
+    sug.add_argument("--max-time-gap", type=float, default=120.0, metavar="MIN")
+    sug.add_argument("--max-space-gap", type=float, default=0.75, metavar="KM")
+    sug.add_argument("--min-junction", type=float, default=2.0, metavar="KM",
+                     help="junction must be this far from the ride start; below it, "
+                          "the two rides simply met back at home (default: 2)")
+    sug.add_argument("--apply", action="store_true", help="save every suggestion as a merge")
+
+    app = mrg.add_parser("apply", help="merge specific activity ids")
+    app.add_argument("ids", nargs="+", type=int)
+    app.add_argument("--name", help="name for the merged ride")
+
+    mrg.add_parser("list", help="show saved merges")
+    rm = mrg.add_parser("remove", help="undo a saved merge")
+    rm.add_argument("ids", nargs="+", type=int, help="any member id of the merge")
+
     # -- explore ------------------------------------------------------------
     exp = sub.add_parser("explore", help="build the local ride browser")
     exp.set_defaults(command="build")
@@ -211,6 +231,116 @@ def _streams_fetch(args, store: Store) -> int:
     return 1 if failures else 0
 
 
+# -------------------------------------------------------------------- merge
+
+
+def _fmt_chain(chain: dict) -> str:
+    head = f"  {chain['date']}  {chain['total_km']:5.1f} km  " + " + ".join(
+        str(m) for m in chain["members"]
+    )
+    lines = [head]
+    for name in chain["names"]:
+        lines.append(f"        - {name[:56]}")
+    for ev in chain["evidence"]:
+        lines.append(
+            f"        gap: {ev['time_gap_min']:.0f} min, "
+            f"{ev['space_gap_km'] * 1000:.0f} m apart, "
+            f"junction {ev['junction_km']:.1f} km from start"
+        )
+    return "\n".join(lines)
+
+
+def _merge_suggest(args, store: Store) -> int:
+    from .merge import load_merges, save_merges, suggest
+
+    chains = suggest(store, args.max_time_gap, args.max_space_gap, args.min_junction)
+    if not chains:
+        print("no split recordings detected")
+        return 0
+
+    print(f"{len(chains)} likely split recording(s):\n")
+    for chain in chains:
+        print(_fmt_chain(chain))
+        print()
+
+    if not args.apply:
+        print("re-run with --apply to save these, or: strava merge apply <id> <id>")
+        return 0
+
+    merges = load_merges(store)
+    known = {tuple(sorted(int(i) for i in m["members"])) for m in merges}
+    added = 0
+    for chain in chains:
+        key = tuple(sorted(chain["members"]))
+        if key not in known:
+            merges.append({"members": chain["members"]})
+            added += 1
+    save_merges(store, merges)
+    print(f"saved {added} new merge(s) to {merges_path_str(store)}")
+    return 0
+
+
+def merges_path_str(store: Store) -> str:
+    from .merge import merges_path
+
+    return str(merges_path(store))
+
+
+def _merge_apply(args, store: Store) -> int:
+    from .merge import MergeError, load_merges, merged_activity, save_merges
+
+    if len(args.ids) < 2:
+        print("need at least two activity ids to merge", file=sys.stderr)
+        return 1
+    try:
+        summary = merged_activity(store, args.ids, args.name)
+    except (MergeError, KeyError) as exc:
+        print(f"cannot merge: {exc}", file=sys.stderr)
+        return 1
+
+    merges = load_merges(store)
+    merges = [m for m in merges if not set(map(int, m["members"])) & set(args.ids)]
+    entry = {"members": args.ids}
+    if args.name:
+        entry["name"] = args.name
+    merges.append(entry)
+    save_merges(store, merges)
+
+    print(f"merged {' + '.join(map(str, args.ids))} -> {summary['id']}")
+    print(f"  {summary['name']}")
+    print(f"  {summary['distance_raw'] / 1000:.1f} km, {summary['elevation_gain_raw']:.0f} m")
+    return 0
+
+
+def _merge_list(args, store: Store) -> int:
+    from .merge import load_merges
+
+    merges = load_merges(store)
+    if not merges:
+        print("no merges saved")
+        return 0
+    activities = store.load_activities()
+    for merge in merges:
+        members = [int(m) for m in merge["members"]]
+        names = [activities.get(str(m), {}).get("name", "?") for m in members]
+        print(f"  {' + '.join(map(str, members))}")
+        for member, name in zip(members, names):
+            print(f"      {member}  {name[:52]}")
+    print(f"\n{len(merges)} merge(s)")
+    return 0
+
+
+def _merge_remove(args, store: Store) -> int:
+    from .merge import load_merges, save_merges
+
+    merges = load_merges(store)
+    targets = set(args.ids)
+    kept = [m for m in merges if not set(map(int, m["members"])) & targets]
+    save_merges(store, kept)
+    print(f"removed {len(merges) - len(kept)} merge(s)")
+    return 0
+
+
 # ------------------------------------------------------------------ explore
 
 
@@ -218,6 +348,14 @@ def _explore_build(args, store: Store) -> int:
     from .explore import build_rides, summarise, write_html
 
     wanted = {int(r["id"]) for r in _select_activities(store, args)}
+    # A merge collapses its members into the first id; keep the survivor when a
+    # filter matched any member, or merged rides would vanish from the page.
+    from .merge import load_merges
+
+    for merge in load_merges(store):
+        members = [int(m) for m in merge["members"]]
+        if wanted & set(members):
+            wanted.add(members[0])
     rides = build_rides(store, tolerance_m=args.tolerance, only_ids=wanted)
     if not rides:
         print("no rides with tracks on disk -- run 'strava streams fetch' first")
@@ -366,6 +504,10 @@ _HANDLERS = {
     ("activities", "sync"): _activities_sync,
     ("activities", "list"): _activities_list,
     ("streams", "fetch"): _streams_fetch,
+    ("merge", "suggest"): _merge_suggest,
+    ("merge", "apply"): _merge_apply,
+    ("merge", "list"): _merge_list,
+    ("merge", "remove"): _merge_remove,
     ("explore", "build"): _explore_build,
 }
 
