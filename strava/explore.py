@@ -294,6 +294,8 @@ _TEMPLATE = r"""<!doctype html>
                      cursor:nwse-resize; box-shadow:0 1px 3px rgba(0,0,0,.4); }
   .strip .cnt { font-size:10px; color:var(--muted); align-self:center; white-space:nowrap; }
   #export { padding:9px 16px; border-top:1px solid var(--line); background:#fbfbfa; }
+  #importMsg { font-size:11px; margin-top:6px; color:var(--muted); min-height:0; }
+  #importMsg.bad { color:var(--accent); }
   #export textarea { width:100%; height:50px; font:11px/1.4 ui-monospace, Menlo, monospace;
                      border:1px solid var(--line); border-radius:4px; padding:6px; resize:vertical; }
   .rank-pin { background:none !important; border:none !important; }
@@ -394,12 +396,17 @@ _TEMPLATE = r"""<!doctype html>
   <div id="stats"></div>
   <div id="list"></div>
   <div id="export">
-    <textarea id="out" readonly></textarea>
-    <div style="display:flex;gap:6px;margin-top:6px">
+    <textarea id="out" spellcheck="false"
+              title="the current selection as JSON -- paste one in and press Import"></textarea>
+    <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
       <button class="primary" id="copy">Copy JSON</button>
-      <button id="download">Save selection</button>
+      <button id="download">Save</button>
+      <button id="importText">Import pasted</button>
+      <button id="importFile">Load file…</button>
       <button id="resetPhotos">Reset photo positions</button>
     </div>
+    <div id="importMsg"></div>
+    <input type="file" id="filePicker" accept="application/json,.json" hidden>
   </div>
 </div>
 <div id="map">
@@ -774,7 +781,8 @@ function render() {
 
       const save = () => {
         persist();
-        document.getElementById('out').value = exportJson();
+        const outEl = document.getElementById('out');
+        if (document.activeElement !== outEl) outEl.value = exportJson();
       };
       marker.on('dragstart', () => marker.getElement()?.classList.add('dragging'));
       marker.on('drag', () => { if (leader) leader.setLatLngs([marker.getLatLng(), photo.at]); });
@@ -856,7 +864,9 @@ function render() {
 
   layoutPins();
   if (legendMode) renderLegend();
-  document.getElementById('out').value = exportJson();
+  // Do not clobber what is being pasted in.
+  const out = document.getElementById('out');
+  if (document.activeElement !== out) out.value = exportJson();
   document.getElementById('ghosts').textContent = showGhosts ? 'Hide unselected' : 'Show unselected';
   document.getElementById('leaders').textContent = cur().leaders ? 'Hide photo lines' : 'Show photo lines';
   document.getElementById('psize').value = cur().size;
@@ -980,19 +990,84 @@ function showChrome(on) {
   if (legendMode) document.body.classList.toggle('chrome', on);
 }
 
+// The export is the save format, so it carries everything needed to rebuild a
+// selection: not just which rides, but the legend and every photo placement.
 function exportJson() {
   const sel = selectedRides();
+  const set = cur();
   return JSON.stringify({
+    version: 1,
     name: state.active,
+    title: set.title || '',
+    legendPos: set.legendPos || null,
+    leaders: set.leaders !== false,
+    photoSize: set.size,
     rides: sel.map((r, i) => ({
       order: i + 1, id: r.id, name: r.name, date: r.date, km: r.km, elev: r.elev,
-      photos: Object.entries(cur().photos[r.id] || {}).map(([id, v]) => {
-        const pl = placement(v, cur().size);
+      photos: Object.entries(set.photos[r.id] || {}).map(([id, v]) => {
+        const pl = placement(v, set.size);
         const photo = r.photos.find(p => p.id === id);
         return { id, pos: pl.pos, size: pl.size, taken_at: photo ? photo.at : null };
       }),
     })),
   }, null, 2);
+}
+
+// A merge collapses its members into one surviving id. A selection saved before
+// a merge still names the members, so map them forward rather than dropping them.
+const survivorOf = new Map();
+for (const r of RIDES) {
+  for (const member of (r.merged_from || [])) survivorOf.set(member, r.id);
+}
+
+function uniqueSetName(base) {
+  let name = base || 'Imported';
+  for (let n = 2; state.sets[name]; n++) name = base + ' (' + n + ')';
+  return name;
+}
+
+function importSelection(text) {
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch (e) {
+    return { error: 'That is not valid JSON.' };
+  }
+  const rides = Array.isArray(payload) ? payload : payload.rides;
+  if (!Array.isArray(rides)) {
+    return { error: 'No \"rides\" array found in that JSON.' };
+  }
+
+  const ids = [];
+  const photos = {};
+  const missing = [];
+  for (const entry of rides) {
+    const rawId = typeof entry === 'object' ? entry.id : entry;
+    const id = byId.has(rawId) ? rawId : survivorOf.get(rawId);
+    if (id === undefined || !byId.has(id)) { missing.push(rawId); continue; }
+    if (!ids.includes(id)) ids.push(id);
+
+    const ride = byId.get(id);
+    for (const ph of (entry && entry.photos) || []) {
+      // Only keep placements for photos this build actually has on disk.
+      if (!ride.photos.some(p => p.id === ph.id)) continue;
+      (photos[id] = photos[id] || {})[ph.id] = {
+        pos: ph.pos, size: ph.size || payload.photoSize || 72,
+      };
+    }
+  }
+
+  const name = uniqueSetName(payload.name || 'Imported');
+  state.sets[name] = {
+    ids, photos,
+    leaders: payload.leaders !== false,
+    size: payload.photoSize || 72,
+    title: payload.title || '',
+    legendPos: payload.legendPos || null,
+  };
+  state.active = name;
+  persist();
+  return { name: name, count: ids.length, missing: missing };
 }
 
 function fitTo(rides) {
@@ -1121,6 +1196,36 @@ document.getElementById('copy').onclick = () => {
   const b = document.getElementById('copy');
   b.textContent = 'Copied'; setTimeout(() => (b.textContent = 'Copy JSON'), 1200);
 };
+function applyImport(text) {
+  const msg = document.getElementById('importMsg');
+  const result = importSelection(text);
+  if (result.error) {
+    msg.className = 'bad';
+    msg.textContent = result.error;
+    return;
+  }
+  msg.className = '';
+  msg.textContent = `imported "${result.name}" -- ${result.count} ride(s)` +
+    (result.missing.length ? `, ${result.missing.length} not in this build (skipped)` : '');
+  render();
+  fitTo(selectedRides());
+}
+
+document.getElementById('importText').onclick = () =>
+  applyImport(document.getElementById('out').value);
+
+document.getElementById('importFile').onclick = () =>
+  document.getElementById('filePicker').click();
+
+document.getElementById('filePicker').onchange = e => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => applyImport(String(reader.result));
+  reader.readAsText(file);
+  e.target.value = '';   // let the same file be picked again
+};
+
 document.getElementById('download').onclick = () => {
   const blob = new Blob([exportJson()], { type: 'application/json' });
   const a = document.createElement('a');

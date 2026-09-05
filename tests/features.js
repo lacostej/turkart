@@ -290,3 +290,89 @@
     return !stray;
   })());
 }
+
+// ---- export / import round-trip ----
+{
+  const ok = (l, c) => console.log((c ? 'PASS  ' : 'FAIL  ') + l);
+  const withPhotos = RIDES.filter(r => r.photos.length >= 2)[0];
+  const plain = RIDES.filter(r => !r.photos.length)[0];
+
+  state.sets['Orig'] = blankSet([withPhotos.id, plain.id]);
+  state.active = 'Orig';
+  const set = cur();
+  set.title = 'Rides with the kids, 2026';
+  set.legendPos = [140, 70];
+  set.size = 128;
+  set.leaders = false;
+  togglePhoto(withPhotos, withPhotos.photos[0], 0);
+  togglePhoto(withPhotos, withPhotos.photos[1], 1);
+  cur().photos[withPhotos.id][withPhotos.photos[0].id] = { pos: [59.4, 10.2], size: 200 };
+  render();
+  const saved = exportJson();
+
+  ok('export carries the legend title and position', (() => {
+    const j = JSON.parse(saved);
+    return j.title === 'Rides with the kids, 2026' && j.legendPos[0] === 140;
+  })());
+  ok('export carries leaders flag and photo size', (() => {
+    const j = JSON.parse(saved);
+    return j.leaders === false && j.photoSize === 128;
+  })());
+
+  const res = importSelection(saved);
+  ok('import does not collide with the existing set name', res.name !== 'Orig' && !!state.sets['Orig']);
+  ok('import restores every ride, in order', (() => {
+    const ids = cur().ids;
+    return ids.length === 2 && ids[0] === withPhotos.id && ids[1] === plain.id;
+  })());
+  ok('import restores the legend', (() => {
+    return cur().title === 'Rides with the kids, 2026' && cur().legendPos[0] === 140;
+  })());
+  ok('import restores leaders and photo size', cur().leaders === false && cur().size === 128);
+  ok('import restores per-photo position and size', (() => {
+    const pl = placement(cur().photos[withPhotos.id][withPhotos.photos[0].id], cur().size);
+    return pl.pos[0] === 59.4 && pl.size === 200;
+  })());
+  ok('re-exporting the import matches the original', (() => {
+    const again = JSON.parse(exportJson());
+    const first = JSON.parse(saved);
+    delete again.name; delete first.name;   // the set is renamed to stay unique
+    return JSON.stringify(again) === JSON.stringify(first);
+  })());
+
+  ok('a bare list of ids imports', (() => {
+    const r = importSelection(JSON.stringify([withPhotos.id, plain.id]));
+    return !r.error && cur().ids.length === 2;
+  })());
+
+  ok('unknown ride ids are skipped and reported', (() => {
+    const r = importSelection(JSON.stringify({ name: 'Ghosts', rides: [{ id: 12345 }, { id: plain.id }] }));
+    return r.missing.length === 1 && r.count === 1;
+  })());
+
+  ok('a member id of a merged ride maps to the survivor', (() => {
+    const merged = RIDES.find(r => (r.merged_from || []).length > 1);
+    if (!merged) return true;
+    const member = merged.merged_from.find(m => m !== merged.id);
+    const r = importSelection(JSON.stringify({ name: 'Old', rides: [{ id: member }] }));
+    return r.missing.length === 0 && cur().ids[0] === merged.id;
+  })());
+
+  ok('placements for photos not on disk are dropped', (() => {
+    const r = importSelection(JSON.stringify({
+      name: 'Stale',
+      rides: [{ id: withPhotos.id, photos: [{ id: 'no-such-photo', pos: [1, 2], size: 80 }] }],
+    }));
+    return !r.error && !cur().photos[withPhotos.id];
+  })());
+
+  ok('invalid JSON is reported, not thrown', (() => {
+    const r = importSelection('{not json');
+    return !!r.error && state.active !== undefined;
+  })());
+
+  ok('JSON without a rides array is reported', (() => {
+    const r = importSelection('{"hello":1}');
+    return !!r.error;
+  })());
+}

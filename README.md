@@ -83,7 +83,8 @@ python -m strava photos list
 ```
 
 Photos are the bulk of the data (~0.6 MB each), so there is no need to fetch them
-for every ride. **`--selection`** takes the JSON the explorer's *Save selection*
+for every ride. The workflow is: pick rides in the explorer, **Save**, then point
+`--selection` at that file. **`--selection`** takes the JSON the explorer's *Save selection*
 button writes and syncs exactly those rides — merged rides expand to the
 activities they absorbed, since photos belong to the activity they were uploaded
 to. **`--scan-only`** finds and indexes the media without downloading a byte, and
@@ -156,7 +157,13 @@ as good a poster backdrop. CyclOSM, Esri Topo and OpenTopoMap are also offered.
   on one pixel. Hovering a row thickens its track and enlarges its pin.
 - The stats bar reports whether the selection **fits on one map**, or how many
   sheets it needs (rides more than 40 km apart get their own)
-- **Save selection.json** exports the chosen ids, in order
+- **Save** writes the selection as JSON; **Load file…** or **Import pasted**
+  (edit the textarea) reads one back. The export is the save format, so it
+  round-trips completely: ride order, legend title and position, photo positions
+  and sizes. An import lands in a new named selection rather than overwriting
+  the current one.
+- The same file drives `photos sync --selection`, so you can pick rides in the
+  browser and fetch only their photos.
 
 CLI filters mirror the UI, e.g. `--tag 16 --sport-type-filter Ride --after 2026-01-01`.
 
