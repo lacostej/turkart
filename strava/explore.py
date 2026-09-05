@@ -407,6 +407,7 @@ let showGhosts = false;
 const drawn = new Map();          // ride id -> {line, pin}
 const photoMarkers = new Map();   // "rideId/photoId" -> marker
 const stripScroll = new Map();    // ride id -> horizontal scroll of its photo strip
+let pinState = [];                // {id, marker, truePos, colour} for pin de-collision
 
 // ---------------------------------------------------------------- map
 const map = L.map('map', { preferCanvas: true, zoomSnap: 0.25, zoomDelta: 0.25, maxZoom: 20 });
@@ -449,6 +450,7 @@ L.control.layers(basemaps, null, { position: 'topright' }).addTo(map);
 
 const ghostLayer = L.layerGroup().addTo(map);
 const trackLayer = L.layerGroup().addTo(map);
+const pinLinkLayer = L.layerGroup().addTo(map);
 const photoLayer = L.layerGroup().addTo(map);
 
 // Track points are [lat, lng, metres_along, altitude_m].
@@ -650,9 +652,11 @@ function render() {
   // ---- map
   trackLayer.clearLayers();
   ghostLayer.clearLayers();
+  pinLinkLayer.clearLayers();
   photoLayer.clearLayers();
   drawn.clear();
   photoMarkers.clear();
+  pinState = [];
 
   if (showGhosts) {
     for (const r of vis) {
@@ -677,6 +681,7 @@ function render() {
     }).addTo(trackLayer);
     pin.bindPopup(popup);
     drawn.set(r.id, { line, pin });
+    pinState.push({ id: r.id, marker: pin, truePos: r.label_at, colour: col });
 
     // Placed photos: draggable, resizable, each tied back to where it was taken.
     const placed = cur().photos[r.id] || {};
@@ -731,6 +736,13 @@ function render() {
       const el = marker.getElement();
       const grip = el && el.querySelector('.grip');
       if (grip) {
+        // Leaflet binds marker dragging to `mousedown` (and `touchstart`), not
+        // `pointerdown`. Stopping only pointerdown left mousedown to bubble to
+        // the marker, so dragging the grip moved the photo instead of resizing
+        // it. Every start event has to be stopped, not just the one we act on.
+        for (const evt of ['mousedown', 'touchstart', 'dblclick']) {
+          grip.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); });
+        }
         grip.addEventListener('pointerdown', ev => {
           ev.preventDefault(); ev.stopPropagation();
           map.dragging.disable();
@@ -775,10 +787,58 @@ function render() {
       `${sel[0].date} → ${sel[sel.length - 1].date} · ${sheets}`;
   }
 
+  layoutPins();
   document.getElementById('out').value = exportJson();
   document.getElementById('ghosts').textContent = showGhosts ? 'Hide unselected' : 'Show unselected';
   document.getElementById('leaders').textContent = cur().leaders ? 'Hide photo lines' : 'Show photo lines';
   document.getElementById('psize').value = cur().size;
+}
+
+// Two rides can share a turnaround exactly -- an out-and-back to the same spot
+// twice -- which stacks their numbers into one unreadable pin. Push overlapping
+// pins apart in *pixel* space so the separation is constant on screen, and
+// recompute on zoom. A hairline connector keeps each pin tied to its true point.
+const PIN_MIN_PX = 26;
+
+function layoutPins() {
+  pinLinkLayer.clearLayers();
+  if (pinState.length < 2) return;
+
+  const pts = pinState.map(s => map.latLngToLayerPoint(L.latLng(s.truePos)));
+  const home = pts.map(p => ({ x: p.x, y: p.y }));
+
+  for (let pass = 0; pass < 60; pass++) {
+    let moved = false;
+    for (let i = 0; i < pts.length; i++) {
+      for (let j = i + 1; j < pts.length; j++) {
+        const a = pts[i], b = pts[j];
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let d = Math.sqrt(dx * dx + dy * dy);
+        if (d >= PIN_MIN_PX) continue;
+        if (d < 1e-6) {
+          // Exactly coincident: nudge along the golden angle so a whole group
+          // fans out evenly instead of all pushing the same direction.
+          const ang = i * 2.399;
+          dx = Math.cos(ang); dy = Math.sin(ang); d = 1;
+        }
+        const push = ((PIN_MIN_PX - d) / 2) / d;
+        a.x -= dx * push; a.y -= dy * push;
+        b.x += dx * push; b.y += dy * push;
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+
+  pinState.forEach((s, i) => {
+    s.marker.setLatLng(map.layerPointToLatLng(pts[i]));
+    const shift = Math.hypot(pts[i].x - home[i].x, pts[i].y - home[i].y);
+    if (shift > 6) {
+      L.polyline([map.layerPointToLatLng(pts[i]), s.truePos], {
+        color: s.colour, weight: 1, opacity: .6, dashArray: '2,2', interactive: false,
+      }).addTo(pinLinkLayer);
+    }
+  });
 }
 
 function exportJson() {
@@ -897,6 +957,8 @@ function showZoom() {
   zoomout.textContent = `z ${map.getZoom().toFixed(2)}  ${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}`;
 }
 map.on('zoom move', showZoom);
+// Pin separation is defined in pixels, so it has to be recomputed per zoom level.
+map.on('zoomend', layoutPins);
 
 render();
 fitTo(cur().ids.length ? selectedRides() : RIDES);
