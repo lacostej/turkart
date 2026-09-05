@@ -75,9 +75,25 @@ is added to the total rather than dropped.
 ## 4. Photos
 
 ```bash
-python -m strava photos sync --tag 16   # scan rides, download stills
+python -m strava photos sync --scan-only            # how much is there? downloads nothing
+python -m strava photos sync --selection sel.json   # only the rides in a saved selection
+python -m strava photos sync --ids 123 456          # or by id
+python -m strava photos sync --tag 16               # or by the usual filters
 python -m strava photos list
 ```
+
+Photos are the bulk of the data (~0.6 MB each), so there is no need to fetch them
+for every ride. **`--selection`** takes the JSON the explorer's *Save selection*
+button writes and syncs exactly those rides — merged rides expand to the
+activities they absorbed, since photos belong to the activity they were uploaded
+to. **`--scan-only`** finds and indexes the media without downloading a byte, and
+reports how many photos and roughly how many MB, so the decision is made on real
+numbers.
+
+Scanning and downloading are separate phases: scanning loads an activity page,
+downloading only needs the URL the scan recorded. So `--scan-only` followed by a
+real sync does the right thing, and re-running a sync downloads only what is
+actually missing.
 
 There is no JSON endpoint — `/activities/<id>/photos` is a 404. The media lives
 in the activity *page*, as the serialised props of a `MediaThumbnailList` React

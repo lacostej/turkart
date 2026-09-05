@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -96,6 +97,12 @@ def main(argv: list[str] | None = None) -> int:
     psync.add_argument("--tag", action="append", type=int)
     psync.add_argument("--sport-type-filter", action="append", metavar="TYPE")
     psync.add_argument("--ids", nargs="*", type=int)
+    psync.add_argument("--selection", type=Path, metavar="FILE",
+                       help="a selection.json saved from the explorer; syncs exactly "
+                            "those rides (merged rides expand to their members)")
+    psync.add_argument("--scan-only", action="store_true",
+                       help="find the media and index it, but download nothing -- "
+                            "reports how many photos and roughly how big before you commit")
     psync.add_argument("--limit", type=int, default=0)
     psync.add_argument("--refresh", action="store_true",
                        help="re-scan activities already in the photo index")
@@ -361,59 +368,157 @@ def _merge_remove(args, store: Store) -> int:
 # ------------------------------------------------------------------- photos
 
 
-def _photos_sync(args, store: Store) -> int:
-    from .photos import download, fetch_media, load_index, save_index
+def _read_selection(path: Path) -> list[int]:
+    """Ride ids from a saved selection.
 
-    targets = [{"id": i} for i in args.ids] if args.ids else _select_activities(store, args)
+    Accepts what the explorer's "Save selection" button writes, and also a bare
+    list of ids, so a hand-written file works too.
+    """
+    payload = json.loads(path.read_text())
+    if isinstance(payload, dict):
+        rides = payload.get("rides") or []
+        return [int(r["id"]) if isinstance(r, dict) else int(r) for r in rides]
+    if isinstance(payload, list):
+        return [int(r["id"]) if isinstance(r, dict) else int(r) for r in payload]
+    raise ValueError(f"{path}: expected a selection object or a list of ids")
+
+
+def _expand_members(store: Store, ids: list[int]) -> list[int]:
+    """Replace each merged ride with the activities it absorbed.
+
+    A merge collapses its members into one id, but photos are stored against the
+    activity they were uploaded to, so the members are what must be scanned.
+    """
+    from .merge import load_merges
+
+    merges = {int(m["members"][0]): [int(x) for x in m["members"]] for m in load_merges(store)}
+    out: list[int] = []
+    for i in ids:
+        for member in merges.get(i, [i]):
+            if member not in out:
+                out.append(member)
+    return out
+
+
+def _photos_sync(args, store: Store) -> int:
+    """Scan activities for media, then download whatever is still missing.
+
+    Scanning and downloading are separate phases on purpose. Scanning loads an
+    activity page; downloading only needs the URL the scan recorded. Keeping
+    them apart means --scan-only can populate the index cheaply and a later run
+    still fetches the images -- if "already indexed" were treated as "already
+    downloaded", a scan-only pass would silently suppress the real sync.
+    """
+    from .photos import Media, download, fetch_media, load_index, save_index, photo_dir
+
+    if args.selection:
+        ids = _expand_members(store, _read_selection(args.selection))
+        known = store.load_activities()
+        targets = [known.get(str(i), {"id": i}) for i in ids]
+        print(f"{len(targets)} activities from {args.selection}")
+    elif args.ids:
+        targets = [{"id": i} for i in _expand_members(store, args.ids)]
+    else:
+        targets = _select_activities(store, args)
+
     targets = [t for t in targets if t.get("has_latlng") is not False]
-    index = load_index(store)
-    if not args.refresh:
-        targets = [t for t in targets if str(t["id"]) not in index]
     if args.limit:
         targets = targets[: args.limit]
+    index = load_index(store)
 
-    if not targets:
-        print("nothing to scan (all activities already in the photo index)")
-        return 0
+    # ---- phase 1: scan pages we have never looked at
+    to_scan = [t for t in targets if args.refresh or str(t["id"]) not in index]
+    client = None
+    if to_scan:
+        print(f"scanning {len(to_scan)} activities for media")
+        client = StravaClient(BrowserSession.load())
+        for n, target in enumerate(to_scan, 1):
+            activity_id = int(target["id"])
+            try:
+                media = fetch_media(client, activity_id)
+            except StravaError as exc:
+                print(f"  [{n}/{len(to_scan)}] {activity_id} FAILED: {exc}", file=sys.stderr)
+                continue
+            index[str(activity_id)] = [
+                {
+                    "photo_id": m.photo_id, "media_type": m.media_type,
+                    "caption": m.caption, "url": m.url, "video_url": m.video_url,
+                    "is_video": m.is_video, "lat": m.lat, "lng": m.lng,
+                    "width": m.width, "height": m.height,
+                }
+                for m in media
+            ]
+            name = target.get("name", "")
+            print(f"  [{n}/{len(to_scan)}] {activity_id} {name[:34]:34s} {len(media)} item(s)")
+        save_index(store, index)
+    else:
+        print("all target activities are already indexed")
 
-    print(f"scanning {len(targets)} activities for media")
-    client = StravaClient(BrowserSession.load())
-    found = saved = videos = 0
-    for n, target in enumerate(targets, 1):
+    # ---- phase 2: download stills that are not on disk yet
+    pending: list[tuple[int, dict]] = []
+    videos = 0
+    for target in targets:
         activity_id = int(target["id"])
-        try:
-            media = fetch_media(client, activity_id)
-        except StravaError as exc:
-            print(f"  [{n}/{len(targets)}] {activity_id} FAILED: {exc}", file=sys.stderr)
-            continue
-
-        index[str(activity_id)] = [
-            {
-                "photo_id": m.photo_id, "media_type": m.media_type,
-                "caption": m.caption, "url": m.url, "video_url": m.video_url,
-                "is_video": m.is_video, "lat": m.lat, "lng": m.lng,
-                "width": m.width, "height": m.height,
-            }
-            for m in media
-        ]
-        if not media:
-            continue
-        found += len(media)
-        for item in media:
-            if item.is_video:
+        for item in index.get(str(activity_id), []):
+            if item.get("is_video"):
                 videos += 1
                 continue
-            try:
-                if download(client, item, store):
-                    saved += 1
-            except StravaError as exc:
-                print(f"      photo {item.photo_id} failed: {exc}", file=sys.stderr)
-        name = target.get("name", "")
-        print(f"  [{n}/{len(targets)}] {activity_id} {name[:34]:34s} {len(media)} item(s)")
+            if not (photo_dir(store, activity_id) / f"{item['photo_id']}.jpg").exists():
+                pending.append((activity_id, item))
 
-    save_index(store, index)
-    print(f"\n{found} media item(s): {saved} photo(s) downloaded, {videos} video(s) indexed only")
-    return 0
+    if args.scan_only:
+        avg_mb = _average_photo_mb(store)
+        print(f"\n{len(pending)} photo(s) not yet on disk, {videos} video(s) (never downloaded)")
+        print(f"roughly {len(pending) * avg_mb:.0f} MB to download "
+              f"(at the {avg_mb:.2f} MB average of what is already here)")
+        print("\nre-run without --scan-only to fetch them")
+        return 0
+
+    if not pending:
+        print(f"\nnothing to download -- every photo for these rides is already on disk")
+        return 0
+
+    print(f"\ndownloading {len(pending)} photo(s)")
+    client = client or StravaClient(BrowserSession.load())
+    saved = failures = 0
+    for n, (activity_id, item) in enumerate(pending, 1):
+        media = Media(
+            photo_id=item["photo_id"], activity_id=activity_id,
+            media_type=item.get("media_type", 1), caption=item.get("caption", ""),
+            url=item.get("url"), video_url=item.get("video_url"),
+        )
+        try:
+            if download(client, media, store):
+                saved += 1
+        except StravaError as exc:
+            failures += 1
+            print(f"  {item['photo_id']} failed: {exc}", file=sys.stderr)
+        if n % 10 == 0 or n == len(pending):
+            print(f"  {n}/{len(pending)}")
+
+    print(f"\n{saved} photo(s) downloaded, {failures} failed, {videos} video(s) skipped")
+    return 1 if failures else 0
+
+
+def _pending_photos(store: Store, index: dict, activity_ids: list[int]) -> list[str]:
+    from .photos import photo_dir
+
+    pending = []
+    for activity_id in activity_ids:
+        for item in index.get(str(activity_id), []):
+            if item.get("is_video"):
+                continue
+            if not (photo_dir(store, activity_id) / f"{item['photo_id']}.jpg").exists():
+                pending.append(item["photo_id"])
+    return pending
+
+
+def _average_photo_mb(store: Store, fallback: float = 0.6) -> float:
+    """Mean size of the photos already downloaded, for estimating the rest."""
+    files = list((store.root / "photos").rglob("*.jpg"))
+    if not files:
+        return fallback
+    return sum(f.stat().st_size for f in files) / len(files) / 1e6
 
 
 def _photos_list(args, store: Store) -> int:
