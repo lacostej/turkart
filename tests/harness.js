@@ -14,12 +14,15 @@ const mkEl = () => ({
   onmouseenter: null, onmouseleave: null, setAttribute(){}, getElement: () => null,
 });
 const els = {};
+const docListeners = {};
 global.document = {
   getElementById: id => (els[id] = els[id] || mkEl()),
   createElement: () => mkEl(),
   body: mkEl(),
   activeElement: null,
+  addEventListener(k, fn) { (docListeners[k] = docListeners[k] || []).push(fn); },
 };
+global.fireDoc = (k, ev) => (docListeners[k] || []).slice().forEach(fn => fn(ev));
 global.navigator = { clipboard: { writeText(){} } };
 global.alert = () => {}; global.confirm = () => true; global.prompt = () => 'X';
 global.Blob = class {}; global.URL = { createObjectURL: () => '', revokeObjectURL(){} };

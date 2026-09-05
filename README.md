@@ -149,9 +149,16 @@ CLI filters mirror the UI, e.g. `--tag 16 --sport-type-filter Ride --after 2026-
 **Legend view** hides the sidebar and puts a legend card on the map, so a single
 screenshot captures both. It carries an editable title, and each ride as a
 numbered circle in **the same colour as its pin on the map** — the circle beside
-a name is the pin out on the route — with name, date, distance and (optionally)
-elevation, plus totals. The card is draggable, and its title, position and the
-elevation toggle are stored per selection.
+a name is the pin out on the route — with name, date, distance and elevation,
+plus totals. The card is draggable; its title and position are stored per
+selection.
+
+The map chrome gets out of the way: zoom, the layer switcher and the coordinate
+readout are hidden. **Hold ⇧ (or ⌘) to bring them back**, and `Esc` leaves
+legend view. A hint says so on entry, so it is not possible to get stuck.
+
+> The attribution control deliberately stays visible. OSM and CARTO both require
+> attribution, and a screenshot without it is not licensed for sharing.
 
 ## Tests
 

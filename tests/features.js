@@ -227,11 +227,9 @@
     return empty && cur().title === 'Rides with the kids, 2026';
   })());
 
-  ok('elevation toggle is stored and defaults on', (() => {
-    const before = cur().showElev;
-    cur().showElev = false; persist();
-    const reloaded = loadState();
-    return before === true && reloaded.sets['Leg'].showElev === false;
+  ok('legend always shows elevation (toggle button removed)', (() => {
+    setLegendMode(true);
+    return document.getElementById('legendTotals').textContent.includes('m climbed');
   })());
 
   ok('legend position is stored per selection', (() => {
@@ -247,5 +245,48 @@
     document.body.classList.toggle = (c, v) => { off = v; };
     setLegendMode(true);
     return off === true;
+  })());
+}
+
+// ---- legend chrome hiding ----
+{
+  const ok = (l, c) => console.log((c ? 'PASS  ' : 'FAIL  ') + l);
+  const kid = RIDES.filter(r => r.tags.includes(16) && r.sport === 'Ride').slice(0, 2);
+  state.sets['Chrome'] = blankSet(kid.map(r => r.id));
+  state.active = 'Chrome';
+
+  const cls = new Set();
+  document.body.classList = {
+    add: c => cls.add(c), remove: c => cls.delete(c),
+    toggle: (c, v) => (v ? cls.add(c) : cls.delete(c)),
+  };
+
+  setLegendMode(true);
+  ok('entering legend mode hides chrome', cls.has('legendmode') && !cls.has('chrome'));
+
+  fireDoc('keydown', { key: 'Shift' });
+  ok('shift reveals the controls', cls.has('chrome'));
+
+  fireDoc('keyup', { key: 'Shift' });
+  ok('releasing shift hides them again', !cls.has('chrome'));
+
+  fireDoc('keydown', { key: 'Meta' });
+  ok('cmd also reveals them', cls.has('chrome'));
+  fireDoc('keyup', { key: 'Meta' });
+
+  fireDoc('keydown', { key: 'Shift' });
+  fireWindow('blur', {});
+  ok('losing focus while held does not strand the controls', !cls.has('chrome'));
+
+  fireDoc('keydown', { key: 'Shift' });
+  fireDoc('keydown', { key: 'Escape' });
+  ok('escape leaves legend mode', !cls.has('legendmode'));
+  ok('leaving legend mode clears the chrome flag', !cls.has('chrome'));
+
+  ok('shift does nothing outside legend mode', (() => {
+    fireDoc('keydown', { key: 'Shift' });
+    const stray = cls.has('chrome');
+    fireDoc('keyup', { key: 'Shift' });
+    return !stray;
   })());
 }

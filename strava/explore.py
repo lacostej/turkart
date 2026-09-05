@@ -307,7 +307,7 @@ _TEMPLATE = r"""<!doctype html>
                    border:3px solid #fff; box-shadow:0 2px 6px rgba(0,0,0,.45); display:block; }
   .photo-pin.dragging { cursor:grabbing; }
   /* Legend: a card over the map, so one screenshot captures both. */
-  #legend { position:absolute; z-index:900; left:24px; top:24px; width:310px;
+  #legend { position:absolute; z-index:1100; left:24px; top:24px; width:310px;
             background:rgba(255,255,255,.96); border-radius:8px; padding:16px 18px 14px;
             box-shadow:0 4px 22px rgba(0,0,0,.22); font-size:13px; }
   #legend h2 { margin:0 0 2px; font-size:19px; line-height:1.25; font-weight:700;
@@ -327,9 +327,28 @@ _TEMPLATE = r"""<!doctype html>
                  font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
   #legend .grab { position:absolute; inset:0 0 auto 0; height:14px; cursor:grab; }
   body.legendmode #sidebar { display:none; }
+  body.legendmode #zoomout { display:none; }
+  /* In legend mode the map is the artwork, so the chrome gets out of the way.
+     Attribution stays: OSM and CARTO both require it, and a screenshot without
+     it is not licensed for sharing. */
+  body.legendmode .leaflet-control-zoom,
+  body.legendmode .leaflet-control-layers,
+  body.legendmode #legendbar {
+    opacity:0; pointer-events:none; transition:opacity .12s;
+  }
+  body.legendmode.chrome .leaflet-control-zoom,
+  body.legendmode.chrome .leaflet-control-layers,
+  body.legendmode.chrome #legendbar {
+    opacity:1; pointer-events:auto;
+  }
+  #legendbar { display:none; position:absolute; z-index:1101; right:10px; top:10px; gap:6px; }
   body.legendmode #legendbar { display:flex; }
-  #legendbar { display:none; position:absolute; z-index:901; right:10px; top:10px; gap:6px; }
-  #legendbar button { background:rgba(255,255,255,.95); }
+  #legendbar button { background:rgba(255,255,255,.95); padding:4px 9px; line-height:1.1; }
+  #chromehint { position:absolute; z-index:1102; left:50%; transform:translateX(-50%);
+                bottom:26px; background:rgba(27,27,26,.82); color:#fff; font-size:12px;
+                padding:5px 12px; border-radius:13px; pointer-events:none;
+                opacity:0; transition:opacity .4s; }
+  #chromehint.show { opacity:1; }
   #zoomout { position:absolute; z-index:500; right:10px; bottom:22px; background:#fff;
              border:1px solid var(--line); border-radius:4px; padding:3px 7px;
              font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
@@ -393,9 +412,9 @@ _TEMPLATE = r"""<!doctype html>
     <div class="tot" id="legendTotals"></div>
   </div>
   <div id="legendbar">
-    <button id="legendBack">&#8592; Back to selector</button>
-    <button id="legendElev">Hide elevation</button>
+    <button id="legendBack" title="Back to selector">&#8592;</button>
   </div>
+  <div id="chromehint">hold &#8679; to show controls</div>
 </div>
 <img id="preview" alt="">
 
@@ -411,7 +430,7 @@ const TAG_WITH_KIDS = 16;
 // per-photo map positions, so a selection fully describes one poster layout.
 function blankSet(ids) {
   return { ids: ids || [], photos: {}, leaders: true, size: 72,
-           title: '', showElev: true, legendPos: null };
+           title: '', legendPos: null };
 }
 
 // A placement is {pos:[lat,lng], size:px}. Early builds stored a bare [lat,lng],
@@ -436,7 +455,6 @@ let state = loadState();
 function cur() {
   const set = state.sets[state.active] || (state.sets[state.active] = blankSet());
   if (set.leaders === undefined) set.leaders = true;
-  if (set.showElev === undefined) set.showElev = true;
   if (set.title === undefined) set.title = '';
   if (!set.size) set.size = 72;
   return set;
@@ -916,9 +934,7 @@ function renderLegend() {
   list.innerHTML = '';
   sel.forEach((r, i) => {
     const li = document.createElement('li');
-    const figures = set.showElev
-      ? `${r.km.toFixed(1)} km · ${r.elev} m`
-      : `${r.km.toFixed(1)} km`;
+    const figures = `${r.km.toFixed(1)} km · ${r.elev} m`;
     li.innerHTML =
       `<span class="num" style="background:${colour(i, sel.length)}">${i + 1}</span>` +
       `<span class="nm"><b>${escapeHtml(r.name)}</b><br>` +
@@ -929,11 +945,8 @@ function renderLegend() {
   const km = sel.reduce((a, r) => a + r.km, 0);
   const elev = sel.reduce((a, r) => a + r.elev, 0);
   document.getElementById('legendTotals').textContent = sel.length
-    ? `${sel.length} rides · ${km.toFixed(0)} km` + (set.showElev ? ` · ${elev.toLocaleString()} m climbed` : '')
+    ? `${sel.length} rides · ${km.toFixed(0)} km · ${elev.toLocaleString()} m climbed`
     : 'nothing selected';
-
-  document.getElementById('legendElev').textContent =
-    set.showElev ? 'Hide elevation' : 'Show elevation';
 
   const el = document.getElementById('legend');
   if (set.legendPos) { el.style.left = set.legendPos[0] + 'px'; el.style.top = set.legendPos[1] + 'px'; }
@@ -948,10 +961,23 @@ function fmtDate(iso) {
 function setLegendMode(on) {
   legendMode = on;
   document.body.classList.toggle('legendmode', on);
+  document.body.classList.remove('chrome');
   document.getElementById('legend').hidden = !on;
   // The sidebar collapses in legend mode, so the map has to re-measure itself.
   setTimeout(() => { map.invalidateSize(); layoutPins(); }, 0);
-  if (on) renderLegend();
+  if (on) { renderLegend(); flashHint(); }
+}
+
+// Controls are hidden in legend mode, so say once how to get them back rather
+// than leaving someone stuck with no way out.
+function flashHint() {
+  const hint = document.getElementById('chromehint');
+  hint.classList.add('show');
+  setTimeout(() => hint.classList.remove('show'), 2600);
+}
+
+function showChrome(on) {
+  if (legendMode) document.body.classList.toggle('chrome', on);
 }
 
 function exportJson() {
@@ -1029,10 +1055,6 @@ document.getElementById('invert').onclick = () => {
 };
 document.getElementById('legendOn').onclick = () => setLegendMode(true);
 document.getElementById('legendBack').onclick = () => setLegendMode(false);
-document.getElementById('legendElev').onclick = () => {
-  cur().showElev = !cur().showElev; persist(); renderLegend();
-};
-
 const legendTitle = document.getElementById('legendTitle');
 legendTitle.addEventListener('input', () => {
   cur().title = legendTitle.textContent.trim(); persist();
@@ -1107,6 +1129,18 @@ document.getElementById('download').onclick = () => {
   a.click();
   URL.revokeObjectURL(a.href);
 };
+
+// Hold shift (or cmd) to bring the map controls back while in legend mode.
+document.addEventListener('keydown', e => {
+  if (e.key === 'Shift' || e.key === 'Meta') showChrome(true);
+  if (e.key === 'Escape' && legendMode) setLegendMode(false);
+});
+document.addEventListener('keyup', e => {
+  if (e.key === 'Shift' || e.key === 'Meta') showChrome(false);
+});
+// Releasing the key outside the page never fires keyup, which would strand the
+// controls visible.
+window.addEventListener('blur', () => showChrome(false));
 
 const zoomout = document.getElementById('zoomout');
 function showZoom() {
