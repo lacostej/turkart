@@ -1,10 +1,10 @@
 """Command line entry point.
 
-    strava auth import LOCAL/strava_web.md   # lift cookies from a cURL capture
-    strava auth status                       # what's stored, and how stale
-    strava activities sync --sport-type Ride # build/refresh the ride index
-    strava activities list --after 2026-01-01
-    strava streams fetch --after 2026-01-01  # download tracks for those rides
+    turkart auth import LOCAL/strava_web.md   # lift cookies from a cURL capture
+    turkart auth status                       # what's stored, and how stale
+    turkart activities sync --sport-type Ride # build/refresh the ride index
+    turkart activities list --after 2026-01-01
+    turkart streams fetch --after 2026-01-01  # download tracks for those rides
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from .store import Store
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="strava", description=__doc__)
+    parser = argparse.ArgumentParser(prog="turkart", description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     sub = parser.add_subparsers(dest="group", required=True)
 
@@ -196,7 +196,7 @@ def _activities_list(args, store: Store) -> int:
     if args.limit:
         rows = rows[: args.limit]
     if not rows:
-        print("no activities matched (run 'strava activities sync' first?)")
+        print("no activities matched (run 'turkart activities sync' first?)")
         return 0
     for raw in rows:
         if raw.get("has_latlng") is False:
@@ -288,7 +288,7 @@ def _merge_suggest(args, store: Store) -> int:
         print()
 
     if not args.apply:
-        print("re-run with --apply to save these, or: strava merge apply <id> <id>")
+        print("re-run with --apply to save these, or: turkart merge apply <id> <id>")
         return 0
 
     merges = load_merges(store)
@@ -553,7 +553,7 @@ def _explore_build(args, store: Store) -> int:
             wanted.add(members[0])
     rides = build_rides(store, tolerance_m=args.tolerance, only_ids=wanted)
     if not rides:
-        print("no rides with tracks on disk -- run 'strava streams fetch' first")
+        print("no rides with tracks on disk -- run 'turkart streams fetch' first")
         return 1
 
     carto_key = None if args.no_carto else load_carto_key()

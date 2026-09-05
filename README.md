@@ -1,7 +1,9 @@
-# Strava → poster
+# turkart
 
-Pull rides out of Strava with a browser session, pick a subset by hand, and (next)
-render them as a printable poster.
+*Norwegian for "touring map" — and these are family turer.*
+
+Pull rides out of Strava with a browser session, pick a subset by hand, arrange
+them with their photos, and turn the result into a printable map poster.
 
 ## Setup
 
@@ -16,8 +18,8 @@ Firefox/Chrome devtools → Network, right-click any request to `strava.com` →
 **Copy → Copy as cURL**, paste it into a file, then:
 
 ```bash
-python -m strava auth import LOCAL/strava_web.md   # accepts a whole scratch file
-python -m strava auth check                        # confirm it works
+python -m turkart auth import LOCAL/strava_web.md   # accepts a whole scratch file
+python -m turkart auth check                        # confirm it works
 ```
 
 Cookies go to `.secrets/session.json` (gitignored, mode 600). When they expire,
@@ -31,9 +33,9 @@ Cookies go to `.secrets/session.json` (gitignored, mode 600). When they expire,
 ## 2. Fetch
 
 ```bash
-python -m strava activities sync --sport-type Ride        # ride summaries
-python -m strava activities sync --sport-type "" --tags 16 # everything tagged "With Kids"
-python -m strava streams fetch                             # GPS tracks for them
+python -m turkart activities sync --sport-type Ride        # ride summaries
+python -m turkart activities sync --sport-type "" --tags 16 # everything tagged "With Kids"
+python -m turkart streams fetch                             # GPS tracks for them
 ```
 
 Everything lands in `data/` (gitignored): `activities.json` plus one
@@ -49,10 +51,10 @@ A ride stopped and restarted mid-outing lands in Strava as two activities. On a
 poster they read as two separate loops from home, and get double-counted.
 
 ```bash
-python -m strava merge suggest            # detect, with evidence
-python -m strava merge suggest --apply    # accept them all
-python -m strava merge apply <idA> <idB> --name "..."
-python -m strava merge list / remove <id>
+python -m turkart merge suggest            # detect, with evidence
+python -m turkart merge suggest --apply    # accept them all
+python -m turkart merge apply <idA> <idB> --name "..."
+python -m turkart merge list / remove <id>
 ```
 
 Detection takes **two** tests, and the second is the one that matters:
@@ -75,11 +77,11 @@ is added to the total rather than dropped.
 ## 4. Photos
 
 ```bash
-python -m strava photos sync --scan-only            # how much is there? downloads nothing
-python -m strava photos sync --selection sel.json   # only the rides in a saved selection
-python -m strava photos sync --ids 123 456          # or by id
-python -m strava photos sync --tag 16               # or by the usual filters
-python -m strava photos list
+python -m turkart photos sync --scan-only            # how much is there? downloads nothing
+python -m turkart photos sync --selection sel.json   # only the rides in a saved selection
+python -m turkart photos sync --ids 123 456          # or by id
+python -m turkart photos sync --tag 16               # or by the usual filters
+python -m turkart photos list
 ```
 
 Photos are the bulk of the data (~0.6 MB each), so there is no need to fetch them
@@ -110,8 +112,8 @@ A merged ride inherits the media of every activity it absorbed.
 ## 5. Select
 
 ```bash
-python -m strava explore --open            # file://
-python -m strava explore --serve --open    # http://localhost:8000
+python -m turkart explore --open            # file://
+python -m turkart explore --serve --open    # http://localhost:8000
 ```
 
 Builds `build/explore.html`, a self-contained page (tracks embedded, Leaflet from
@@ -210,14 +212,14 @@ enough pins to trigger the projection path, without one there are not.
 
 | path | role |
 |---|---|
-| `strava/session.py` | parse cURL captures, store/rebuild the browser session |
-| `strava/client.py` | the internal endpoints, paced and error-mapped |
-| `strava/store.py` | `data/` cache, atomic writes |
-| `strava/geo.py` | RDP simplification, bounding boxes, ride clustering |
-| `strava/merge.py` | detect and fold together split recordings |
-| `strava/photos.py` | scrape and download ride media |
-| `strava/explore.py` | builds the selector page |
-| `strava/cli.py` | command line |
+| `turkart/session.py` | parse cURL captures, store/rebuild the browser session |
+| `turkart/client.py` | the internal endpoints, paced and error-mapped |
+| `turkart/store.py` | `data/` cache, atomic writes |
+| `turkart/geo.py` | RDP simplification, bounding boxes, ride clustering |
+| `turkart/merge.py` | detect and fold together split recordings |
+| `turkart/photos.py` | scrape and download ride media |
+| `turkart/explore.py` | builds the selector page |
+| `turkart/cli.py` | command line |
 
 Track points in the built page are `[lat, lng, metres_along, altitude_m]` — the
 other streams are carried through simplification by index, so a sub-range of a

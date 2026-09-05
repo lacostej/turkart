@@ -19,8 +19,8 @@ cat tests/harness.js "$PAGE" | node - && echo '  no crash'
 
 echo '--- startup: with a saved selection (needs a view before render) ---'
 IDS=$(.venv/bin/python -c "
-from strava.store import Store
-from strava.explore import build_rides
+from turkart.store import Store
+from turkart.explore import build_rides
 r = build_rides(Store())[:3]
 print(','.join(str(x['id']) for x in r))")
 SEED=$(mktemp -t seed).js

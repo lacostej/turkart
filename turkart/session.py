@@ -7,7 +7,7 @@ hand, we parse them straight out of a "Copy as cURL" command from devtools.
 Flow:
     1. Open strava.com logged in, devtools -> Network.
     2. Load any page, right-click a request to strava.com -> Copy -> Copy as cURL.
-    3. Paste it into a file and run: strava auth import <file>
+    3. Paste it into a file and run: turkart auth import <file>
 
 The extracted credentials go to .secrets/session.json (gitignored).
 """
@@ -125,7 +125,7 @@ class BrowserSession:
         if not path.exists():
             raise SessionError(
                 f"No saved session at {path}. Copy a strava.com request from "
-                "devtools as cURL, then run: strava auth import <file>"
+                "devtools as cURL, then run: turkart auth import <file>"
             )
         raw = json.loads(path.read_text())
         return cls(

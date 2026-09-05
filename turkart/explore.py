@@ -230,7 +230,7 @@ _TEMPLATE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ride selector</title>
+<title>turkart — ride selector</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -364,7 +364,7 @@ _TEMPLATE = r"""<!doctype html>
 <body>
 <div id="sidebar">
   <header>
-    <h1>Ride selector</h1>
+    <h1>turkart</h1>
     <div class="setbar">
       <select id="setPicker" title="saved selections"></select>
       <button class="icon" id="setNew" title="new selection">+</button>
@@ -433,6 +433,8 @@ _TEMPLATE = r"""<!doctype html>
 <script>
 const RIDES = __RIDES__;
 const byId = new Map(RIDES.map(r => [r.id, r]));
+// Deliberately keeps its original name through the rename to turkart: this key
+// holds every saved selection, and changing it would orphan them in the browser.
 const STORAGE = 'strava-poster-v2';
 const LEGACY = 'strava-poster-selection';
 const TAG_WITH_KIDS = 16;

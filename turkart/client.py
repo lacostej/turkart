@@ -87,7 +87,7 @@ class StravaClient:
             raise SessionError(
                 f"Strava rejected the request ({response.status_code}). The browser "
                 "session has most likely expired -- grab a fresh 'Copy as cURL' "
-                "and re-run: strava auth import <file>"
+                "and re-run: turkart auth import <file>"
             )
         if response.status_code == 429:
             raise StravaError("Rate limited by Strava (429). Wait a while and retry.")
@@ -96,7 +96,7 @@ class StravaClient:
         if "/login" in response.url or "/onboarding" in response.url:
             raise SessionError(
                 "Redirected to the login page -- the browser session has expired. "
-                "Re-run: strava auth import <file>"
+                "Re-run: turkart auth import <file>"
             )
         if not response.ok:
             raise StravaError(f"GET {url} -> {response.status_code}")
