@@ -176,8 +176,8 @@ a name is the pin out on the route — with name, date, distance and elevation,
 plus totals. The card is draggable; its title and position are stored per
 selection.
 
-The map chrome gets out of the way: zoom, the layer switcher and the coordinate
-readout are hidden. **Hold ⇧ (or ⌘) to bring them back**, and `Esc` leaves
+The map chrome gets out of the way: zoom, the layer switcher, the coordinate
+readout and the photo resize grips are hidden. **Hold ⇧ (or ⌘) to bring them back**, and `Esc` leaves
 legend view. A hint says so on entry, so it is not possible to get stuck.
 
 > The attribution control deliberately stays visible. OSM and CARTO both require

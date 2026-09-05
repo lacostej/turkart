@@ -343,6 +343,11 @@ _TEMPLATE = r"""<!doctype html>
   body.legendmode.chrome #legendbar {
     opacity:1; pointer-events:auto;
   }
+  /* The resize grip is an editing affordance, not part of the artwork, so it
+     goes with the rest of the chrome -- hidden in legend view, back while the
+     reveal key is held. Photos stay draggable either way, for fine positioning. */
+  body.legendmode .photo-pin .grip { display:none; }
+  body.legendmode.chrome .photo-pin .grip { display:block; }
   #legendbar { display:none; position:absolute; z-index:1101; right:10px; top:10px; gap:6px; }
   body.legendmode #legendbar { display:flex; }
   #legendbar button { background:rgba(255,255,255,.95); padding:4px 9px; line-height:1.1; }
