@@ -802,7 +802,10 @@ const PIN_MIN_PX = 26;
 
 function layoutPins() {
   pinLinkLayer.clearLayers();
-  if (pinState.length < 2) return;
+  // Projecting latlng to pixels needs a centre and zoom; before the first
+  // fitBounds the map has neither and Leaflet throws. getZoom() is the one
+  // readiness check that returns undefined rather than throwing.
+  if (pinState.length < 2 || map.getZoom() === undefined) return;
 
   const pts = pinState.map(s => map.latLngToLayerPoint(L.latLng(s.truePos)));
   const home = pts.map(p => ({ x: p.x, y: p.y }));
@@ -857,10 +860,13 @@ function exportJson() {
 }
 
 function fitTo(rides) {
-  if (!rides.length) return;
+  if (!rides.length) return false;
   const b = L.latLngBounds([]);
   rides.forEach(r => r.track.forEach(p => b.extend([p[0], p[1]])));
+  // fitBounds throws on empty bounds, which happens if every ride is trackless.
+  if (!b.isValid || !b.isValid()) return false;
   map.fitBounds(b, { padding: [30, 30] });
+  return true;
 }
 
 // ---------------------------------------------------------------- wiring
@@ -960,8 +966,11 @@ map.on('zoom move', showZoom);
 // Pin separation is defined in pixels, so it has to be recomputed per zoom level.
 map.on('zoomend', layoutPins);
 
+// The view must exist before the first render: render() lays out the pins, and
+// that projects coordinates. Falling back to a world view keeps an empty or
+// trackless data set from leaving the map unusable.
+if (!fitTo(cur().ids.length ? selectedRides() : RIDES)) map.setView([0, 0], 2);
 render();
-fitTo(cur().ids.length ? selectedRides() : RIDES);
 showZoom();
 </script>
 </body>

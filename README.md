@@ -144,6 +144,23 @@ as good a poster backdrop. CyclOSM, Esri Topo and OpenTopoMap are also offered.
 
 CLI filters mirror the UI, e.g. `--tag 16 --sport-type-filter Ride --after 2026-01-01`.
 
+## Tests
+
+```bash
+./tests/run.sh
+```
+
+Runs the built page's script headlessly against DOM and Leaflet stubs. The stubs
+deliberately model two Leaflet behaviours that real bugs hid behind:
+
+- projecting a coordinate before the map has a centre and zoom **throws**, so
+  rendering before the first `fitBounds` is caught rather than passing silently;
+- marker dragging starts on `mousedown`, not `pointerdown`, so a control that
+  only stops the latter is caught letting a drag through.
+
+Startup is checked both with and without a saved selection — with one there are
+enough pins to trigger the projection path, without one there are not.
+
 ## Layout
 
 | path | role |
