@@ -177,8 +177,14 @@ plus totals. The card is draggable; its title and position are stored per
 selection.
 
 The map chrome gets out of the way: zoom, the layer switcher, the coordinate
-readout and the photo resize grips are hidden. **Hold ⇧ (or ⌘) to bring them back**, and `Esc` leaves
-legend view. A hint says so on entry, so it is not possible to get stuck.
+readout and the photo resize grips are hidden. **Hold ⇧ or ⌥ to bring them
+back**, and `Esc` leaves legend view. A hint says so on entry, so it is not
+possible to get stuck.
+
+> ⌘ is deliberately *not* a reveal key, and any pair of modifiers keeps the
+> controls hidden — `⌘⇧4` is the macOS screenshot shortcut, so revealing on ⌘,
+> or on ⇧ combined with anything, would put the controls into the very
+> screenshot legend view exists to take.
 
 > The attribution control deliberately stays visible. OSM and CARTO both require
 > attribution, and a screenshot without it is not licensed for sharing.

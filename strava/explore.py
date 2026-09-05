@@ -426,7 +426,7 @@ _TEMPLATE = r"""<!doctype html>
   <div id="legendbar">
     <button id="legendBack" title="Back to selector">&#8592;</button>
   </div>
-  <div id="chromehint">hold &#8679; to show controls</div>
+  <div id="chromehint">hold &#8679; or &#8997; to show controls</div>
 </div>
 <img id="preview" alt="">
 
@@ -1240,13 +1240,33 @@ document.getElementById('download').onclick = () => {
   URL.revokeObjectURL(a.href);
 };
 
-// Hold shift (or cmd) to bring the map controls back while in legend mode.
+// Hold shift or option to bring the map controls back while in legend mode.
+//
+// Cmd is deliberately not a reveal key, and any *pair* of modifiers keeps the
+// controls hidden: cmd-shift-4 is the macOS screenshot shortcut, so revealing on
+// cmd or on shift-with-anything would put the controls into the very screenshot
+// the legend view exists to take.
+function wantsChrome(e) {
+  const held = [e.shiftKey, e.altKey, e.metaKey, e.ctrlKey].filter(Boolean).length;
+  return held === 1 && (e.shiftKey || e.altKey);
+}
+
+// Shift is also how capitals are typed, so ignore keys aimed at the legend
+// title or the JSON box.
+function isTyping(e) {
+  const el = e.target;
+  return !!el && (el.isContentEditable === true ||
+                  el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
+}
+
 document.addEventListener('keydown', e => {
-  if (e.key === 'Shift' || e.key === 'Meta') showChrome(true);
-  if (e.key === 'Escape' && legendMode) setLegendMode(false);
+  if (e.key === 'Escape' && legendMode && !isTyping(e)) { setLegendMode(false); return; }
+  if (isTyping(e)) return;
+  showChrome(wantsChrome(e));
 });
 document.addEventListener('keyup', e => {
-  if (e.key === 'Shift' || e.key === 'Meta') showChrome(false);
+  if (isTyping(e)) return;
+  showChrome(wantsChrome(e));
 });
 // Releasing the key outside the page never fires keyup, which would strand the
 // controls visible.

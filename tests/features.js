@@ -260,33 +260,84 @@
     add: c => cls.add(c), remove: c => cls.delete(c),
     toggle: (c, v) => (v ? cls.add(c) : cls.delete(c)),
   };
+  // Modifier state as a browser reports it, not just the key name.
+  const key = (k, mods = {}) => ({
+    key: k, target: null,
+    shiftKey: !!mods.shift, altKey: !!mods.alt,
+    metaKey: !!mods.meta, ctrlKey: !!mods.ctrl,
+  });
 
   setLegendMode(true);
   ok('entering legend mode hides chrome', cls.has('legendmode') && !cls.has('chrome'));
 
-  fireDoc('keydown', { key: 'Shift' });
-  ok('shift reveals the controls', cls.has('chrome'));
-
-  fireDoc('keyup', { key: 'Shift' });
+  fireDoc('keydown', key('Shift', { shift: true }));
+  ok('shift alone reveals the controls', cls.has('chrome'));
+  fireDoc('keyup', key('Shift'));
   ok('releasing shift hides them again', !cls.has('chrome'));
 
-  fireDoc('keydown', { key: 'Meta' });
-  ok('cmd also reveals them', cls.has('chrome'));
-  fireDoc('keyup', { key: 'Meta' });
+  fireDoc('keydown', key('Alt', { alt: true }));
+  ok('option alone reveals the controls', cls.has('chrome'));
+  fireDoc('keyup', key('Alt'));
 
-  fireDoc('keydown', { key: 'Shift' });
+  // The whole point: cmd+shift is the macOS screenshot shortcut.
+  fireDoc('keydown', key('Meta', { meta: true }));
+  ok('cmd alone does NOT reveal', !cls.has('chrome'));
+  fireDoc('keydown', key('Shift', { meta: true, shift: true }));
+  ok('cmd+shift does NOT reveal (screenshot combo)', !cls.has('chrome'));
+  fireDoc('keydown', key('4', { meta: true, shift: true }));
+  ok('cmd+shift+4 does NOT reveal', !cls.has('chrome'));
+  fireDoc('keyup', key('Shift', { meta: true }));
+  fireDoc('keyup', key('Meta'));
+
+  ok('adding cmd while shift is held hides them again', (() => {
+    fireDoc('keydown', key('Shift', { shift: true }));
+    const shown = cls.has('chrome');
+    fireDoc('keydown', key('Meta', { shift: true, meta: true }));
+    return shown && !cls.has('chrome');
+  })());
+  fireDoc('keyup', key('Meta', { shift: true }));
+  fireDoc('keyup', key('Shift'));
+
+  ok('ctrl+shift does not reveal either', (() => {
+    fireDoc('keydown', key('Shift', { shift: true, ctrl: true }));
+    return !cls.has('chrome');
+  })());
+  fireDoc('keyup', key('Shift'));
+
+  ok('typing a capital in the legend title does not flash the controls', (() => {
+    const typed = { key: 'A', shiftKey: true, altKey: false, metaKey: false,
+                    ctrlKey: false, target: { isContentEditable: true, tagName: 'H2' } };
+    fireDoc('keydown', typed);
+    return !cls.has('chrome');
+  })());
+
+  ok('typing in the JSON box does not flash the controls', (() => {
+    fireDoc('keydown', { key: 'A', shiftKey: true, altKey: false, metaKey: false,
+                         ctrlKey: false, target: { tagName: 'TEXTAREA' } });
+    return !cls.has('chrome');
+  })());
+
+  fireDoc('keydown', key('Shift', { shift: true }));
   fireWindow('blur', {});
   ok('losing focus while held does not strand the controls', !cls.has('chrome'));
 
-  fireDoc('keydown', { key: 'Shift' });
-  fireDoc('keydown', { key: 'Escape' });
+  fireDoc('keydown', key('Escape'));
   ok('escape leaves legend mode', !cls.has('legendmode'));
   ok('leaving legend mode clears the chrome flag', !cls.has('chrome'));
 
+  ok('escape while typing does not leave legend mode', (() => {
+    setLegendMode(true);
+    fireDoc('keydown', { key: 'Escape', shiftKey: false, altKey: false, metaKey: false,
+                         ctrlKey: false, target: { isContentEditable: true, tagName: 'H2' } });
+    const still = cls.has('legendmode');
+    setLegendMode(false);
+    return still;
+  })());
+
   ok('shift does nothing outside legend mode', (() => {
-    fireDoc('keydown', { key: 'Shift' });
+    fireDoc('keydown', key('Shift', { shift: true }));
     const stray = cls.has('chrome');
-    fireDoc('keyup', { key: 'Shift' });
+    fireDoc('keyup', key('Shift'));
     return !stray;
   })());
 }
