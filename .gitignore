@@ -1,0 +1,14 @@
+# Browser session cookies / CSRF token live here. Never commit.
+.secrets/
+*.curl
+# Sniffed request captures -- these contain live session cookies.
+LOCAL/
+
+# Fetched ride data (large, re-fetchable)
+data/
+# Generated selector page (rebuild with: python -m strava explore)
+build/
+
+.venv/
+__pycache__/
+*.pyc

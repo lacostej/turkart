@@ -1,0 +1,18 @@
+[project]
+name = "strava-poster"
+version = "0.1.0"
+description = "Fetch Strava rides via a browser session and turn a selected subset into a printable poster."
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.32",
+]
+
+[project.scripts]
+strava = "strava.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["strava"]
