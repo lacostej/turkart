@@ -11,7 +11,109 @@ them with their photos, and turn the result into a printable map poster.
 uv venv && uv pip install requests
 ```
 
-## 1. Auth
+## Getting started
+
+End to end, from nothing to a poster image. Each step links to its reference
+section below.
+
+### 1. Give it a Strava session
+
+turkart reads Strava as your browser does, so it needs your browser's session.
+
+1. Open <https://www.strava.com> and make sure you are logged in.
+2. Open devtools (`⌥⌘I` in Firefox) → **Network** tab.
+3. Reload the page. Right-click any request to `www.strava.com` →
+   **Copy → Copy as cURL**.
+4. Paste it into a file under `LOCAL/` — that directory is gitignored precisely
+   because the paste contains a live session cookie:
+
+```bash
+mkdir -p LOCAL && pbpaste > LOCAL/strava.curl
+python -m turkart auth import LOCAL/strava.curl
+python -m turkart auth check          # confirms it works, names your athlete id
+```
+
+`auth check` is the authoritative test — see [Auth](#auth) for why the expiry
+hint it prints can look stale while the session is fine.
+
+### 2. Fetch the rides
+
+```bash
+python -m turkart activities sync --sport-type Ride   # ride summaries
+python -m turkart streams fetch                       # the GPS tracks
+```
+
+Paced at ~1 request/second, so a few hundred rides takes a couple of minutes.
+Both are cached — re-running only fetches what is missing.
+
+> **Tracks must be fetched here.** A ride has nothing to draw until its stream is
+> on disk, so it does not appear in the page at all. Photos are different — those
+> are fetched later, from the UI, only for the rides you actually pick.
+
+### 3. Open the editor
+
+```bash
+python -m turkart explore --serve --open
+```
+
+Serving rather than opening the file directly is what enables photo fetching and
+the OSM basemap. Then put the browser in **fullscreen** (`⌃⌘F` in Firefox on
+macOS) — the final image is whatever the window shows, so composing at the size
+you will capture at saves redoing it.
+
+### 4. Name a selection *(optional)*
+
+Press **+** in the bar at the top of the sidebar and give it a name, e.g.
+"Rides with the kids 2026". Selections are independent layouts, so this is worth
+doing before a second poster rather than after. Skip it and you work in
+"Selection 1".
+
+### 5. Pick the rides, then their photos
+
+Filter down — **With kids only**, **Rides only**, a date range — then click rides
+to select them. **The order you click is the order they are numbered**, on both
+the map and the legend.
+
+Then press **Fetch photos for selection**. Rides with no photos yet show their
+own **Fetch photos** button. Click a thumbnail to place that photo on the map;
+hover one to see it large without placing it.
+
+### 6. Compose
+
+Press **✕** at the top right to hide the editor and show the legend. The map does
+not move when you do this.
+
+- Click the legend title to type one.
+- Drag the map, zoom with `+`/`−` or the scroll wheel, until the framing is right.
+- Drag photos where you want them. Hold **⇧** or **⌥** to bring back the controls
+  — including each photo's corner grip for resizing, and **Save view**.
+- **Save view** stores that centre and zoom with the selection, so you can come
+  back to exactly this framing.
+
+### 7. Take the picture
+
+With the controls hidden (release ⇧), use Firefox's own screenshot: right-click
+the page → **Take Screenshot** → **Save visible**.
+
+Note that `⌘⇧4` — macOS's screenshot — is deliberately *not* a control-reveal
+shortcut, so using it will not pull the chrome back into your capture.
+
+### Then what
+
+**Save** writes the selection as JSON: ride order, legend, framing, photo
+positions and sizes. **Load file…** reads it back. That file also drives the CLI:
+
+```bash
+python -m turkart photos sync --selection my-poster.json
+```
+
+---
+
+## Reference
+
+The steps above in more detail, plus what is not in them.
+
+### Auth
 
 Strava's internal JSON endpoints authenticate with your browser's cookies. In
 Firefox/Chrome devtools → Network, right-click any request to `strava.com` →
@@ -30,7 +132,7 @@ Cookies go to `.secrets/session.json` (gitignored, mode 600). When they expire,
 > the hint often reads stale while the session still works. `auth check` is the
 > authoritative answer.
 
-## 2. Fetch
+### Fetch
 
 ```bash
 python -m turkart activities sync --sport-type Ride        # ride summaries
@@ -45,7 +147,7 @@ Fetching is the only step that needs credentials; every later step is offline.
 
 Fetches are paced at ~1 req/sec. Rides with `has_latlng: false` are skipped.
 
-## 3. Repair split recordings
+### Repair split recordings
 
 A ride stopped and restarted mid-outing lands in Strava as two activities. On a
 poster they read as two separate loops from home, and get double-counted.
@@ -74,7 +176,7 @@ folded in when the page is built: `distance` and `time` are cumulative per
 activity, so they get re-accumulated, and the straight-line hop across the gap
 is added to the total rather than dropped.
 
-## 4. Photos
+### Photos
 
 ```bash
 python -m turkart photos sync --scan-only            # how much is there? downloads nothing
@@ -109,7 +211,7 @@ Stills land in `data/photos/<activity_id>/` at full resolution (1500×2000 here)
 Videos are recorded in the index but not downloaded — only their HLS URL exists.
 A merged ride inherits the media of every activity it absorbed.
 
-## 5. Select
+### Select
 
 ```bash
 python -m turkart explore --open            # file://
@@ -119,7 +221,7 @@ python -m turkart explore --serve --open    # http://localhost:8000
 Builds `build/explore.html`, a self-contained page (tracks embedded, Leaflet from
 CDN) — it runs off the filesystem, so your GPS traces are never uploaded anywhere.
 
-### Basemaps
+#### Basemaps
 
 Two constraints shape the choice, both found the hard way:
 
@@ -179,7 +281,7 @@ would need — a full sync costs one API request per activity.
 
 CLI filters mirror the UI, e.g. `--tag 16 --sport-type-filter Ride --after 2026-01-01`.
 
-### Legend view
+#### Legend view
 
 **Legend view** hides the sidebar and puts a legend card on the map, so a single
 screenshot captures both. It carries an editable title, and each ride as a
@@ -201,7 +303,7 @@ possible to get stuck.
 > The attribution control deliberately stays visible. OSM and CARTO both require
 > attribution, and a screenshot without it is not licensed for sharing.
 
-### Stored selections
+#### Stored selections
 
 Selections live in the browser under `turkart-selections`. Two older key names
 are migrated into it once at load and then deleted:

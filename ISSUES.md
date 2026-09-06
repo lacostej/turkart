@@ -73,6 +73,21 @@ the working window and fullscreen — the legend card is positioned in pixels fr
 the map's top-left, so it should hold, but photo positions are geographic and the
 visible framing will differ. Related to 2 and 3.
 
+## 6. Tracks still need a CLI step
+
+Photos are now fetched from the UI on demand, but streams are not, and a ride
+with no stream does not appear in the page at all — so `streams fetch` remains a
+prerequisite before the editor is useful.
+
+The chicken-and-egg: the page only knows about rides it can draw, so to offer
+"fetch this ride's track" it would first have to list rides it *cannot* draw.
+That means `build_rides` including trackless rides as placeholders, and the list
+distinguishing "not downloaded" from "no GPS". Not hard, but a bigger change than
+the photo endpoint, which only had to fill in something the page already showed.
+
+Worth doing if onboarding someone else — it would reduce first-run setup to auth
+plus one sync.
+
 ---
 
 *More to come — this list is expected to grow before any of it is acted on.*
