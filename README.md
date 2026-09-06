@@ -5,6 +5,14 @@
 Pull rides out of Strava with a browser session, pick a subset by hand, arrange
 them with their photos, and turn the result into a printable map poster.
 
+![A turkart poster: one ride across Bali, its photos placed around the map with
+lines back to where each was taken, and a legend naming the ride, its date,
+distance and climbing.](docs/sample1.jpg)
+
+*Made with turkart: rides selected in the editor, photos fetched for those rides
+only, each placed by hand with a line back to where it was taken, then captured
+from legend view.*
+
 ## Setup
 
 ```bash
