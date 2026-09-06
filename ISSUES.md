@@ -55,13 +55,15 @@ over it, so toggling changes nothing about the map's size and there is nothing t
 re-measure. `invalidateSize` is gone. Fitting now pads by the sidebar width in
 editor mode so fitted rides do not land underneath it.
 
-## 4. Legend toggle and close are in different places
+## 4. Legend toggle and close are in different places — *fixed*
 
 "Legend view" sits in the sidebar toolbar; "←" sits top-right of the map. Enter
 and exit should be the same control in the same place, so it reads as one toggle.
 
-Follows naturally from 3: with the sidebar as an overlay, one button in a fixed
-position can toggle it.
+Fixed: one button, fixed at the window's top-right, in the same pixel position
+both ways. Visible in editor mode; in legend view it reappears in that same spot
+while ⇧/⌥ is held, so screenshots stay clean. The sidebar's "Legend view" button
+and the map's "←" are both gone — there is one control now, not two.
 
 ## 5. Fullscreen capture
 

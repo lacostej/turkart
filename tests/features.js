@@ -601,3 +601,39 @@
     return far && map.getCenter().lat === 59.91;
   })());
 }
+
+// ---- the single editor/legend toggle ----
+{
+  const ok = (l, c) => console.log((c ? 'PASS  ' : 'FAIL  ') + l);
+  const kid = RIDES.filter(r => r.tags.includes(16) && r.sport === 'Ride').slice(0, 2);
+  state.sets['Toggle'] = blankSet(kid.map(r => r.id));
+  state.active = 'Toggle';
+  const btn = document.getElementById('viewToggle');
+
+  setLegendMode(false);
+  ok('toggle has a label at rest (not blank)', !!btn.textContent);
+  const editorFace = btn.textContent;
+
+  setLegendMode(true);
+  ok('toggle face changes in legend view', btn.textContent !== editorFace && !!btn.textContent);
+  ok('toggle title explains the way back', /Esc/i.test(btn.title));
+
+  setLegendMode(false);
+  ok('toggle returns to its editor face', btn.textContent === editorFace);
+
+  ok('the toggle drives both directions', (() => {
+    btn.onclick();
+    const wentIn = document.getElementById('legend').hidden === false;
+    btn.onclick();
+    const cameBack = document.getElementById('legend').hidden === true;
+    return wentIn && cameBack;
+  })());
+
+  ok('toggling still does not move the map', (() => {
+    map.setView([59.94, 10.71], 13.5);
+    const before = JSON.stringify([map.getCenter(), map.getZoom()]);
+    btn.onclick();
+    btn.onclick();
+    return JSON.stringify([map.getCenter(), map.getZoom()]) === before;
+  })());
+}

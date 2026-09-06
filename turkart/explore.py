@@ -345,12 +345,12 @@ _TEMPLATE = r"""<!doctype html>
   body:not(.legendmode) .leaflet-top.leaflet-left { margin-left:440px; }
   body.legendmode .leaflet-control-zoom,
   body.legendmode .leaflet-control-layers,
-  body.legendmode #legendbar {
+  body.legendmode #topright {
     opacity:0; pointer-events:none; transition:opacity .12s;
   }
   body.legendmode.chrome .leaflet-control-zoom,
   body.legendmode.chrome .leaflet-control-layers,
-  body.legendmode.chrome #legendbar {
+  body.legendmode.chrome #topright {
     opacity:1; pointer-events:auto;
   }
   /* The resize grip is an editing affordance, not part of the artwork, so it
@@ -358,9 +358,16 @@ _TEMPLATE = r"""<!doctype html>
      reveal key is held. Photos stay draggable either way, for fine positioning. */
   body.legendmode .photo-pin .grip { display:none; }
   body.legendmode.chrome .photo-pin .grip { display:block; }
-  #legendbar { display:none; position:absolute; z-index:1101; right:10px; top:10px; gap:6px; }
-  body.legendmode #legendbar { display:flex; }
-  #legendbar button { background:rgba(255,255,255,.95); padding:4px 9px; line-height:1.1; }
+  /* The single editor/legend toggle. Same pixel position in both modes, so it
+     reads as one control rather than two -- which is the whole point. Laid out
+     as a row so the layers control below it needs only one clearance value. */
+  #topright { position:absolute; z-index:1101; right:10px; top:10px;
+              display:flex; flex-direction:row; align-items:flex-start; gap:6px; }
+  #topright button { background:rgba(255,255,255,.95); padding:4px 9px; line-height:1.1; }
+  #viewToggle { font-size:14px; min-width:30px; }
+  /* Save view lives in the sidebar while the sidebar is there. */
+  body:not(.legendmode) #saveViewLegend { display:none; }
+  .leaflet-top.leaflet-right { margin-top:38px; }
   #chromehint { position:absolute; z-index:1102; left:50%; transform:translateX(-50%);
                 bottom:26px; background:rgba(27,27,26,.82); color:#fff; font-size:12px;
                 padding:5px 12px; border-radius:13px; pointer-events:none;
@@ -403,7 +410,6 @@ _TEMPLATE = r"""<!doctype html>
     <button id="zoomSel">Zoom to selection</button>
     <button id="ghosts">Show unselected</button>
     <button id="leaders">Hide photo lines</button>
-    <button id="legendOn">Legend view</button>
     <button id="saveView" title="remember this centre and zoom with the selection">Save view</button>
     <label class="tog" style="margin-left:auto">size
       <input type="range" id="psize" min="40" max="220" step="4" style="width:90px">
@@ -434,9 +440,9 @@ _TEMPLATE = r"""<!doctype html>
     <ol id="legendList"></ol>
     <div class="tot" id="legendTotals"></div>
   </div>
-  <div id="legendbar">
-    <button id="legendBack" title="Back to selector">&#8592;</button>
+  <div id="topright">
     <button id="saveViewLegend" title="remember this centre and zoom">Save view</button>
+    <button id="viewToggle"></button>
   </div>
   <div id="chromehint">hold &#8679; or &#8997; to show controls</div>
 </div>
@@ -1015,6 +1021,9 @@ function setLegendMode(on) {
   document.body.classList.toggle('legendmode', on);
   document.body.classList.remove('chrome');
   document.getElementById('legend').hidden = !on;
+  const toggle = document.getElementById('viewToggle');
+  toggle.textContent = on ? '\u25e7' : '\u2715';
+  toggle.title = on ? 'Back to the editor (Esc)' : 'Hide the editor and show the legend';
   // No invalidateSize here on purpose. The map is the same size in both modes --
   // the sidebar floats over it -- so there is nothing to re-measure, and calling
   // it would pan the map by half the sidebar width and move the composition.
@@ -1215,8 +1224,8 @@ function onSaveView(buttonId) {
 document.getElementById('saveView').onclick = onSaveView('saveView');
 document.getElementById('saveViewLegend').onclick = onSaveView('saveViewLegend');
 
-document.getElementById('legendOn').onclick = () => setLegendMode(true);
-document.getElementById('legendBack').onclick = () => setLegendMode(false);
+const viewToggle = document.getElementById('viewToggle');
+viewToggle.onclick = () => setLegendMode(!legendMode);
 const legendTitle = document.getElementById('legendTitle');
 legendTitle.addEventListener('input', () => {
   cur().title = legendTitle.textContent.trim(); persist();
@@ -1368,6 +1377,9 @@ map.on('zoomend', layoutPins);
 // trackless data set from leaving the map unusable.
 if (!applyView(cur()) &&
     !fitTo(cur().ids.length ? selectedRides() : RIDES)) map.setView([0, 0], 2);
+// Establishes the toggle's face and title; without it the button starts blank,
+// since its label is only ever set when the mode changes.
+setLegendMode(false);
 render();
 showZoom();
 </script>
