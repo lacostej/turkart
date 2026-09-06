@@ -575,7 +575,8 @@ def _explore_build(args, store: Store) -> int:
     print(f"\nwrote {path} ({path.stat().st_size / 1e6:.1f} MB), basemap: {basemap}")
 
     if args.serve:
-        return _serve(path, args.serve, open_browser=args.open, store=store)
+        return _serve(path, args.serve, open_browser=args.open, store=store,
+                      tolerance_m=args.tolerance)
     if args.open:
         import webbrowser
 
@@ -583,7 +584,8 @@ def _explore_build(args, store: Store) -> int:
     return 0
 
 
-def _serve(path: Path, port: int, open_browser: bool, store: Store) -> int:
+def _serve(path: Path, port: int, open_browser: bool, store: Store,
+           tolerance_m: float = 8.0) -> int:
     """Serve the built page over localhost until interrupted.
 
     Falls back to a free port rather than dying on EADDRINUSE: the default 8000
@@ -604,7 +606,7 @@ def _serve(path: Path, port: int, open_browser: bool, store: Store) -> int:
             length = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(length) if length else b""
             try:
-                status, payload = fetchapi.handle(store, self.path, body)
+                status, payload = fetchapi.handle(store, self.path, body, tolerance_m)
             except Exception as exc:  # never take the server down for one request
                 status, payload = 500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
             data = json.dumps(payload).encode()

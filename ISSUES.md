@@ -73,7 +73,7 @@ the working window and fullscreen — the legend card is positioned in pixels fr
 the map's top-left, so it should hold, but photo positions are geographic and the
 visible framing will differ. Related to 2 and 3.
 
-## 6. Tracks still need a CLI step
+## 6. Tracks still need a CLI step — *fixed*
 
 Photos are now fetched from the UI on demand, but streams are not, and a ride
 with no stream does not appear in the page at all — so `streams fetch` remains a
@@ -85,8 +85,16 @@ That means `build_rides` including trackless rides as placeholders, and the list
 distinguishing "not downloaded" from "no GPS". Not hard, but a bigger change than
 the photo endpoint, which only had to fill in something the page already showed.
 
-Worth doing if onboarding someone else — it would reduce first-run setup to auth
-plus one sync.
+Fixed by that route: `build_rides` now emits a record for every activity, with
+`hasTrack: false` and empty geometry for those not downloaded. They appear in the
+list, greyed, with a **Fetch track** button, and clicking one fetches its track
+and then selects it. `POST /api/streams/sync` returns records rebuilt by
+`build_rides`, so a fetched ride is byte-identical to one present at build time —
+verified. A ride Strava recorded without GPS is marked distinctly and never
+offered, since no track exists to ask for.
+
+First-run setup is now auth plus `activities sync`; tracks and photos can both be
+pulled from the editor.
 
 ---
 

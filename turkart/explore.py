@@ -36,6 +36,98 @@ def load_carto_key() -> str | None:
     return None
 
 
+def ride_record(
+    store: Store,
+    raw: dict,
+    streams: dict | None,
+    tolerance_m: float = 8.0,
+    photo_index: dict | None = None,
+) -> dict:
+    """One page-ready ride.
+
+    ``streams`` may be None, for a ride whose track has not been downloaded yet.
+    Such a ride is still listed -- with everything the activity summary knows --
+    so it can be seen and its track fetched on demand. Geometry fields are empty
+    rather than absent, so the page never has to branch on their existence, only
+    on ``hasTrack``.
+
+    Each simplified track point is ``[lat, lng, metres_along, altitude_m]``: the
+    other streams are carried through the simplification by index, so any later
+    stage can read distance and elevation for a sub-range of a ride without
+    reloading the full-resolution streams.
+    """
+    ts = raw.get("start_date_local_raw")
+    started = datetime.fromtimestamp(ts, tz=timezone.utc) if ts else None
+
+    record = {
+        "id": raw["id"],
+        "photos": photo_records(store, raw.get("merged_from") or [raw["id"]], photo_index),
+        "name": raw.get("name") or "(untitled)",
+        "date": started.strftime("%Y-%m-%d") if started else None,
+        "time": started.strftime("%H:%M") if started else None,
+        "ts": ts,
+        "km": round((raw.get("distance_raw") or 0) / 1000.0, 2),
+        "elev": round(raw.get("elevation_gain_raw") or 0),
+        "moving_s": raw.get("moving_time_raw") or 0,
+        "commute": bool(raw.get("commute")),
+        # Strava stores tags as {"<id>": bool}; keep only the set ones.
+        "tags": sorted(int(k) for k, v in (raw.get("tags") or {}).items() if v),
+        "sport": raw.get("sport_type") or "",
+        "desc": (raw.get("description") or "")[:300],
+        "url": f"https://www.strava.com/activities/{raw['id']}",
+        "merged_from": raw.get("merged_from") or [],
+        # A ride Strava recorded without GPS can never get a track, which is a
+        # different thing from one simply not downloaded yet.
+        "noGps": raw.get("has_latlng") is False,
+        "hasTrack": False,
+        "points": 0,
+        "centre": None,
+        "bbox": None,
+        "alt_range": None,
+        "label_at": None,
+        "far_km": 0,
+        "track": [],
+    }
+
+    latlng = (streams or {}).get("latlng") or []
+    if not latlng:
+        return record
+
+    indices = simplify_indices(latlng, tolerance_m)
+    dist = streams.get("distance") or []
+    alt = streams.get("altitude") or []
+    box = bounds([latlng])
+
+    # Every ride leaves from home, so a label pinned to the start point would
+    # stack all of them on one pixel. The point furthest from the start is the
+    # turnaround -- distinct per ride, and usually where the long stop was,
+    # which is the part of the ride worth naming.
+    origin = latlng[0]
+    far_i = max(range(len(latlng)), key=lambda i: haversine_km(origin, latlng[i]))
+
+    record.update(
+        {
+            "hasTrack": True,
+            "points": len(latlng),
+            "centre": [round((box[0] + box[2]) / 2, 5), round((box[1] + box[3]) / 2, 5)],
+            "bbox": [round(v, 5) for v in box],
+            "alt_range": [round(min(alt)), round(max(alt))] if alt else None,
+            "label_at": [round(latlng[far_i][0], 5), round(latlng[far_i][1], 5)],
+            "far_km": round(haversine_km(origin, latlng[far_i]), 2),
+            "track": [
+                [
+                    round(latlng[i][0], 5),
+                    round(latlng[i][1], 5),
+                    round(dist[i]) if i < len(dist) else 0,
+                    round(alt[i]) if i < len(alt) else 0,
+                ]
+                for i in indices
+            ],
+        }
+    )
+    return record
+
+
 def build_rides(
     store: Store,
     tolerance_m: float = 8.0,
@@ -43,10 +135,10 @@ def build_rides(
 ) -> list[dict]:
     """Join the activity index with the stored tracks into render-ready records.
 
-    Each simplified track point is ``[lat, lng, metres_along, altitude_m]``: the
-    other streams are carried through the simplification by index, so any later
-    stage can read distance and elevation for a sub-range of a ride without
-    reloading the full-resolution streams.
+    Rides whose tracks are not downloaded yet are included, flagged ``hasTrack:
+    false``. They cannot be drawn, but they can be listed and their track pulled
+    on demand -- which is the only way the page can offer to fetch something it
+    does not have.
     """
     # Saved merges are folded in here rather than on disk, so the original
     # per-activity streams stay intact and a merge stays reversible.
@@ -62,72 +154,8 @@ def build_rides(
         elif store.has_streams(key):
             streams = store.load_streams(key)
         else:
-            continue
-        latlng = streams.get("latlng") or []
-        if not latlng:
-            continue
-
-        indices = simplify_indices(latlng, tolerance_m)
-        dist = streams.get("distance") or []
-        alt = streams.get("altitude") or []
-        track = [
-            [
-                round(latlng[i][0], 5),
-                round(latlng[i][1], 5),
-                round(dist[i]) if i < len(dist) else 0,
-                round(alt[i]) if i < len(alt) else 0,
-            ]
-            for i in indices
-        ]
-        box = bounds([latlng])
-        altitude = streams.get("altitude") or []
-
-        # Every ride leaves from home, so a label pinned to the start point would
-        # stack all of them on one pixel. The point furthest from the start is
-        # the turnaround -- distinct per ride, and usually where the long stop
-        # was, which is the part of the ride worth naming.
-        start = latlng[0]
-        far_i = max(range(len(latlng)), key=lambda i: haversine_km(start, latlng[i]))
-        far_km = haversine_km(start, latlng[far_i])
-        ts = raw.get("start_date_local_raw")
-        start = datetime.fromtimestamp(ts, tz=timezone.utc) if ts else None
-
-        photos = photo_records(store, raw.get("merged_from") or [raw["id"]], photo_index)
-
-        rides.append(
-            {
-                "id": raw["id"],
-                "photos": photos,
-                "name": raw.get("name") or "(untitled)",
-                "date": start.strftime("%Y-%m-%d") if start else None,
-                "time": start.strftime("%H:%M") if start else None,
-                "ts": ts,
-                "km": round((raw.get("distance_raw") or 0) / 1000.0, 2),
-                "elev": round(raw.get("elevation_gain_raw") or 0),
-                "moving_s": raw.get("moving_time_raw") or 0,
-                "commute": bool(raw.get("commute")),
-                # Strava stores tags as {"<id>": bool}; keep only the set ones.
-                "tags": sorted(
-                    int(k) for k, v in (raw.get("tags") or {}).items() if v
-                ),
-                "sport": raw.get("sport_type") or "",
-                "desc": (raw.get("description") or "")[:300],
-                "url": f"https://www.strava.com/activities/{raw['id']}",
-                "points": len(latlng),
-                "merged_from": raw.get("merged_from") or [],
-                "centre": [
-                    round((box[0] + box[2]) / 2, 5),
-                    round((box[1] + box[3]) / 2, 5),
-                ],
-                "bbox": [round(v, 5) for v in box],
-                "alt_range": (
-                    [round(min(altitude)), round(max(altitude))] if altitude else None
-                ),
-                "label_at": [round(latlng[far_i][0], 5), round(latlng[far_i][1], 5)],
-                "far_km": round(far_km, 2),
-                "track": track,
-            }
-        )
+            streams = None
+        rides.append(ride_record(store, raw, streams, tolerance_m, photo_index))
 
     rides.sort(key=lambda r: r["ts"] or 0)
     return rides
@@ -177,6 +205,7 @@ def summarise(rides: list[dict], max_gap_km: float = 40.0) -> dict:
     makes the overall bounding box thousands of km wide, which says nothing about
     the sheet each group of rides actually needs.
     """
+    rides = [r for r in rides if r.get("hasTrack")]
     if not rides:
         return {"count": 0}
 
@@ -314,6 +343,10 @@ _TEMPLATE = r"""<!doctype html>
                      background:#fff; border:2px solid var(--accent); border-radius:50%;
                      cursor:nwse-resize; box-shadow:0 1px 3px rgba(0,0,0,.4); }
   .strip .cnt { font-size:10px; color:var(--muted); align-self:center; white-space:nowrap; }
+  .ride.untracked { opacity:.62; }
+  .ride.untracked .swatch { background:repeating-linear-gradient(45deg,#d9d9d4,#d9d9d4 2px,#fff 2px,#fff 4px); }
+  .nogps { font-size:10px; font-weight:700; color:#6b6b66; background:#ececes;
+           border-radius:3px; padding:0 4px; margin-left:5px; vertical-align:1px; }
   .fetchrow { padding:0 16px 8px 50px; }
   .fetchrow button { font-size:11px; padding:3px 8px; }
   .fetchrow .note { font-size:11px; color:var(--muted); margin-left:7px; }
@@ -333,10 +366,13 @@ _TEMPLATE = r"""<!doctype html>
                    border:3px solid #fff; box-shadow:0 2px 6px rgba(0,0,0,.45); display:block; }
   .photo-pin.dragging { cursor:grabbing; }
   /* Legend: a card over the map, so one screenshot captures both. */
-  #legend { position:absolute; z-index:1100; left:24px; top:24px; width:310px;
+  /* Leaflet puts `cursor: grab` on the map container, which every child
+     inherits -- so the legend and its editable title showed the map's drag
+     cursor. Restore sane cursors for the card. */
+  #legend { cursor:default; position:absolute; z-index:1100; left:24px; top:24px; width:310px;
             background:rgba(255,255,255,.96); border-radius:8px; padding:16px 18px 14px;
             box-shadow:0 4px 22px rgba(0,0,0,.22); font-size:13px; }
-  #legend h2 { margin:0 0 2px; font-size:19px; line-height:1.25; font-weight:700;
+  #legend h2 { cursor:text; margin:0 0 2px; font-size:19px; line-height:1.25; font-weight:700;
                letter-spacing:-.01em; outline:none; }
   #legend h2:empty::before { content:'Click to add a title'; color:#b9b9b2; }
   #legend .period { margin:0 0 11px; font-size:11px; color:var(--muted);
@@ -357,11 +393,6 @@ _TEMPLATE = r"""<!doctype html>
   /* In legend mode the map is the artwork, so the chrome gets out of the way.
      Attribution stays: OSM and CARTO both require it, and a screenshot without
      it is not licensed for sharing. */
-  /* The map now runs full width underneath the floating sidebar, so Leaflet's
-     top-left controls (zoom) would sit behind it. Shift them clear while the
-     sidebar is showing, and let them return to the window edge without it. */
-  .leaflet-top.leaflet-left { transition:margin-left .12s ease; }
-  body:not(.legendmode) .leaflet-top.leaflet-left { margin-left:440px; }
   body.legendmode .leaflet-control-zoom,
   body.legendmode .leaflet-control-layers,
   body.legendmode #topright {
@@ -444,7 +475,8 @@ _TEMPLATE = r"""<!doctype html>
       <button id="download">Save</button>
       <button id="importText">Import pasted</button>
       <button id="importFile">Load file…</button>
-      <button id="fetchAll">Fetch photos for selection</button>
+      <button id="fetchTracks">Fetch missing tracks</button>
+    <button id="fetchAll">Fetch photos for selection</button>
     <button id="resetPhotos">Reset photo positions</button>
     </div>
     <div id="importMsg"></div>
@@ -546,7 +578,8 @@ const stripScroll = new Map();    // ride id -> horizontal scroll of its photo s
 let pinState = [];                // {id, marker, truePos, colour} for pin de-collision
 
 // ---------------------------------------------------------------- map
-const map = L.map('map', { preferCanvas: true, zoomSnap: 0.25, zoomDelta: 0.25, maxZoom: 20 });
+const map = L.map('map', { preferCanvas: true, zoomSnap: 0.25, zoomDelta: 0.25,
+                           maxZoom: 20, zoomControl: false });
 
 // Basemap choice is a real constraint, not a preference:
 //   - CARTO needs an API key; without one its tiles come back watermarked
@@ -583,6 +616,14 @@ if (CARTO_KEY) {
 const defaultLayer = CARTO_KEY ? 'Carto Positron' : 'Esri Light Gray';
 basemaps[defaultLayer].addTo(map);
 L.control.layers(basemaps, null, { position: 'topright' }).addTo(map);
+// Zoom joins the same top-right column, added after layers so it sits below it.
+// Everything the map offers is then in one place and stays there: previously
+// zoom was top-left and had to be shifted 440px sideways to clear the sidebar,
+// so it moved whenever the sidebar did. Leaflet's control container is
+// z-index 1000 against the marker pane's 600, so these sit above the photos
+// while visible -- and while hidden they are opacity:0 and pointer-events:none,
+// so they neither show through nor intercept a drag.
+L.control.zoom({ position: 'topright' }).addTo(map);
 
 const ghostLayer = L.layerGroup().addTo(map);
 const trackLayer = L.layerGroup().addTo(map);
@@ -600,6 +641,46 @@ function fmtDuration(s) {
 // file:// page there is nothing to call, so the controls are simply not offered.
 const CAN_FETCH = location.protocol === 'http:' || location.protocol === 'https:';
 const fetching = new Set();
+
+// Selecting after a fetch is the common intent -- someone clicked the ride.
+async function fetchTracksFor(ids, label, selectAfter) {
+  const wanted = ids.filter(id => !fetching.has(id));
+  if (!wanted.length) return;
+  wanted.forEach(id => fetching.add(id));
+  if (label) { label.disabled = true; label.textContent = 'fetching…'; }
+  render();
+  try {
+    const res = await fetch('/api/streams/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: wanted }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'fetch failed');
+    // Replace the placeholder record wholesale: a fetched ride is rebuilt
+    // server-side, so it arrives complete rather than needing patching.
+    for (const [id, ride] of Object.entries(data.rides || {})) {
+      const at = RIDES.findIndex(r => r.id === Number(id));
+      if (at >= 0) RIDES[at] = ride; else RIDES.push(ride);
+      byId.set(Number(id), ride);
+    }
+    if (selectAfter) {
+      for (const id of wanted) {
+        const ride = byId.get(id);
+        if (ride && ride.hasTrack && !cur().ids.includes(id)) cur().ids.push(id);
+      }
+      persist();
+    }
+    setFetchNote(`fetched ${data.fetched} track(s)` +
+      (data.empty ? `, ${data.empty} had no GPS` : '') +
+      (data.failed ? `, ${data.failed} failed` : ''));
+  } catch (err) {
+    setFetchNote(String(err.message || err), true);
+  } finally {
+    wanted.forEach(id => fetching.delete(id));
+    render();
+  }
+}
 
 async function fetchPhotosFor(ids, label) {
   const wanted = ids.filter(id => !fetching.has(id));
@@ -685,6 +766,13 @@ function selectedRides() {
   return order.map(id => byId.get(id)).filter(Boolean);
 }
 
+// Rides whose track is not downloaded cannot be drawn, measured or clustered.
+// Everything that touches geometry goes through this rather than guarding at
+// each use.
+function drawableRides() {
+  return selectedRides().filter(r => r.hasTrack);
+}
+
 function haversineKm(a, b) {
   const R = 6371, rad = Math.PI / 180;
   const dLat = (b[0] - a[0]) * rad, dLon = (b[1] - a[1]) * rad;
@@ -703,6 +791,13 @@ function clusterCount(rides, gapKm = 40) {
 
 // ---------------------------------------------------------------- selection
 function toggleRide(id) {
+  const ride = byId.get(id);
+  // Selecting a ride that cannot be drawn would put a number in the legend with
+  // nothing on the map beside it. Fetch the track first; selection follows.
+  if (ride && !ride.hasTrack) {
+    if (!ride.noGps && CAN_FETCH) fetchTracksFor([id], null, true);
+    return;
+  }
   const ids = cur().ids;
   const at = ids.indexOf(id);
   if (at >= 0) {
@@ -764,7 +859,7 @@ function renderSets() {
 function render() {
   renderSets();
   const vis = visibleRides();
-  const sel = selectedRides();
+  const sel = drawableRides();
   const chosen = selectedSet();
   const rank = new Map(sel.map((r, i) => [r.id, i]));
 
@@ -778,7 +873,7 @@ function render() {
     const block = document.createElement('div');
     block.className = 'rideblock';
     const row = document.createElement('div');
-    row.className = 'ride' + (on ? ' on' : '');
+    row.className = 'ride' + (on ? ' on' : '') + (r.hasTrack ? '' : ' untracked');
     const col = on ? colour(rank.get(r.id), sel.length) : '#d9d9d4';
     row.innerHTML = `
       <input type="checkbox" ${on ? 'checked' : ''}>
@@ -787,12 +882,26 @@ function render() {
         <span class="nm">${on ? (rank.get(r.id) + 1) + '. ' : ''}${escapeHtml(r.name)}${
           (r.tags || []).includes(TAG_WITH_KIDS) ? '<span class="kid">KIDS</span>' : ''}</span>
         <span class="sub">${r.date} · ${r.km.toFixed(1)} km · ${r.elev} m · ${fmtDuration(r.moving_s)}${
+          r.noGps ? ' · no GPS' : (r.hasTrack ? '' : ' · track not downloaded')}${
           r.photos.length ? ' · ' + r.photos.length + ' photo' + (r.photos.length > 1 ? 's' : '') : ''}</span>
       </span>`;
     row.onmouseenter = () => highlight(r.id, true);
     row.onmouseleave = () => highlight(r.id, false);
     row.onclick = () => toggleRide(r.id);
     block.appendChild(row);
+
+    // A ride whose track is missing offers to fetch it, so the whole history
+    // does not have to be downloaded before the editor is usable.
+    if (!r.hasTrack && !r.noGps && CAN_FETCH) {
+      const trackRow = document.createElement('div');
+      trackRow.className = 'fetchrow';
+      const tb = document.createElement('button');
+      tb.textContent = fetching.has(r.id) ? 'fetching…' : 'Fetch track';
+      tb.disabled = fetching.has(r.id);
+      tb.onclick = e => { e.stopPropagation(); fetchTracksFor([r.id], tb, true); };
+      trackRow.appendChild(tb);
+      block.appendChild(trackRow);
+    }
 
     // A selected ride with no photos yet can have them pulled on demand, which
     // is why media is not synced for the whole history up front.
@@ -1054,7 +1163,7 @@ function layoutPins() {
 let legendMode = false;
 
 function renderLegend() {
-  const sel = selectedRides();
+  const sel = drawableRides();
   const set = cur();
   const title = document.getElementById('legendTitle');
   if (document.activeElement !== title) title.textContent = set.title || '';
@@ -1237,7 +1346,7 @@ function applyView(set) {
 // Restore a saved framing if there is one, otherwise frame the rides.
 function frameFor(set) {
   if (applyView(set)) return true;
-  return fitTo(selectedRides());
+  return fitTo(drawableRides());
 }
 
 // ---------------------------------------------------------------- wiring
@@ -1313,6 +1422,16 @@ legendTitle.addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); legendTitle.blur(); }
 });
 
+// A DOM overlay inside a Leaflet map still feeds it events, so a click on the
+// legend was starting a map drag -- and the drag handler's preventDefault meant
+// the contenteditable title never took focus. Leaflet ships the fix for exactly
+// this case.
+for (const id of ['legend', 'topright']) {
+  const el = document.getElementById(id);
+  L.DomEvent.disableClickPropagation(el);
+  L.DomEvent.disableScrollPropagation(el);
+}
+
 // Drag the legend by its top strip, so it can be placed clear of the tracks.
 (() => {
   const card = document.getElementById('legend');
@@ -1352,8 +1471,20 @@ psize.oninput = () => {
       forRide[id] = { pos: placement(forRide[id], size).pos, size };
   persist(); render();
 };
-document.getElementById('zoomSel').onclick = () => fitTo(selectedRides());
+document.getElementById('zoomSel').onclick = () => fitTo(drawableRides());
 document.getElementById('ghosts').onclick = () => { showGhosts = !showGhosts; render(); };
+const fetchTracksBtn = document.getElementById('fetchTracks');
+if (!CAN_FETCH) {
+  fetchTracksBtn.disabled = true;
+  fetchTracksBtn.title = 'only available when the page is served (explore --serve)';
+} else {
+  fetchTracksBtn.onclick = () => {
+    const missing = visibleRides().filter(r => !r.hasTrack && !r.noGps).map(r => r.id);
+    if (!missing.length) { setFetchNote('every visible ride already has its track'); return; }
+    fetchTracksFor(missing, fetchTracksBtn, false);
+  };
+}
+
 const fetchAllBtn = document.getElementById('fetchAll');
 if (!CAN_FETCH) {
   fetchAllBtn.disabled = true;
@@ -1367,7 +1498,7 @@ if (!CAN_FETCH) {
 }
 
 document.getElementById('resetPhotos').onclick = () => {
-  for (const r of selectedRides()) {
+  for (const r of drawableRides()) {
     const placed = cur().photos[r.id];
     if (!placed) continue;
     Object.keys(placed).forEach((pid, i) => {
@@ -1466,7 +1597,8 @@ map.on('zoomend', layoutPins);
 // that projects coordinates. Falling back to a world view keeps an empty or
 // trackless data set from leaving the map unusable.
 if (!applyView(cur()) &&
-    !fitTo(cur().ids.length ? selectedRides() : RIDES)) map.setView([0, 0], 2);
+    !fitTo(cur().ids.length ? drawableRides() : RIDES.filter(r => r.hasTrack)))
+  map.setView([0, 0], 2);
 // Establishes the toggle's face and title; without it the button starts blank,
 // since its label is only ever set when the mode changes.
 setLegendMode(false);

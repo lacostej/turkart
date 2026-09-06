@@ -40,15 +40,16 @@ hint it prints can look stale while the session is fine.
 
 ```bash
 python -m turkart activities sync --sport-type Ride   # ride summaries
-python -m turkart streams fetch                       # the GPS tracks
+python -m turkart streams fetch                       # optional: all GPS tracks
 ```
 
 Paced at ~1 request/second, so a few hundred rides takes a couple of minutes.
 Both are cached — re-running only fetches what is missing.
 
-> **Tracks must be fetched here.** A ride has nothing to draw until its stream is
-> on disk, so it does not appear in the page at all. Photos are different — those
-> are fetched later, from the UI, only for the rides you actually pick.
+> `streams fetch` is the bulk option. You can skip it and pull tracks from the
+> editor instead — rides without one are listed greyed out with a **Fetch track**
+> button. Photos work the same way. Fetching only what you pick is much lighter
+> than downloading a whole history.
 
 ### 3. Open the editor
 

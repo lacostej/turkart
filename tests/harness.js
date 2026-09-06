@@ -88,7 +88,8 @@ global.L = {
   tileLayer: () => layer(), layerGroup: () => layer(), polyline: () => layer(),
   marker: () => layer(), divIcon: () => ({}), circleMarker: () => layer(),
   latLng: (a) => ({ lat: Array.isArray(a) ? a[0] : a.lat, lng: Array.isArray(a) ? a[1] : a.lng }),
-  control: { layers: () => ({ addTo(){} }) },
+  control: { layers: () => ({ addTo(){} }), zoom: () => ({ addTo(){} }) },
+  DomEvent: { disableClickPropagation(){}, disableScrollPropagation(){} },
   latLngBounds: () => ({ _empty: true, extend(){ this._empty = false; },
                          isValid(){ return !this._empty; } }),
 };

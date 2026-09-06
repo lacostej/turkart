@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .client import StravaClient, StravaError
+from .client import DEFAULT_STREAM_TYPES, StravaClient, StravaError
 from .photos import Media, download, fetch_media, load_index, photo_dir, save_index
 from .session import BrowserSession, SessionError
 from .store import Store
@@ -112,9 +112,52 @@ def sync_photos(store: Store, ids: list[int]) -> dict[str, Any]:
     }
 
 
-def handle(store: Store, path: str, body: bytes) -> tuple[int, dict[str, Any]]:
+def sync_streams(store: Store, ids: list[int], tolerance_m: float = 8.0) -> dict[str, Any]:
+    """Download GPS tracks for specific activities.
+
+    Returns freshly built ride records so the page can replace its placeholders
+    in place. Records come from build_rides rather than being assembled here, so
+    a fetched ride is identical to one that was present at build time -- merges
+    folded in, photos attached, geometry derived the same way.
+    """
+    from .explore import build_rides
+
+    members = expand_members(store, ids)[:MAX_IDS_PER_CALL]
+    wanted = [m for m in members if not store.has_streams(m)]
+
+    fetched = failed = 0
+    empty: list[int] = []
+    if wanted:
+        client = StravaClient(BrowserSession.load())
+        activities = store.load_activities()
+        for activity_id in wanted:
+            # A ride Strava recorded without GPS has no track to ask for.
+            if (activities.get(str(activity_id)) or {}).get("has_latlng") is False:
+                empty.append(activity_id)
+                continue
+            try:
+                payload = client.streams(activity_id, DEFAULT_STREAM_TYPES)
+            except StravaError:
+                failed += 1
+                continue
+            if not (payload.get("latlng") or []):
+                empty.append(activity_id)
+                continue
+            store.save_streams(activity_id, payload)
+            fetched += 1
+
+    rides = build_rides(store, tolerance_m=tolerance_m, only_ids=set(members) | set(ids))
+    return {
+        "ok": True, "fetched": fetched, "failed": failed, "empty": len(empty),
+        "rides": {str(r["id"]): r for r in rides},
+    }
+
+
+def handle(
+    store: Store, path: str, body: bytes, tolerance_m: float = 8.0
+) -> tuple[int, dict[str, Any]]:
     """Route one API call. Returns (status, payload)."""
-    if path != "/api/photos/sync":
+    if path not in ("/api/photos/sync", "/api/streams/sync"):
         return 404, {"ok": False, "error": f"no such endpoint: {path}"}
 
     try:
@@ -127,6 +170,8 @@ def handle(store: Store, path: str, body: bytes) -> tuple[int, dict[str, Any]]:
         return 400, {"ok": False, "error": "no ride ids given"}
 
     try:
+        if path == "/api/streams/sync":
+            return 200, sync_streams(store, ids, tolerance_m)
         return 200, sync_photos(store, ids)
     except SessionError as exc:
         # Expired cookies are the common failure and need a human, so say so

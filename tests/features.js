@@ -1,5 +1,11 @@
 // Behavioural checks for the built page, run against the stubs in harness.js.
-// Each suite is block-scoped so they can share the same page instance.
+// Sync suites are block-scoped; async ones are queued and awaited in order,
+// because they share RIDES, `state` and the fetch stub, and interleaving them
+// makes each one see the other's mutations.
+const SUITES = [];
+// The page's fetch helpers are fire-and-forget in places (a click handler cannot
+// be awaited), so give their promise chains room to settle before asserting.
+const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
 // ---- photos: placement, sizing, persistence ----
 {
@@ -641,7 +647,7 @@
 // ---- fetching photos from the UI ----
 // Fully sequential: fetchPhotosFor de-duplicates rides already in flight, so
 // overlapping calls would silently no-op and make the assertions meaningless.
-(async () => {
+SUITES.push(async () => {
   const ok = (l, c) => console.log((c ? 'PASS  ' : 'FAIL  ') + l);
   const bare = RIDES.filter(r => !r.photos.length).slice(0, 3);
   const full = RIDES.find(r => r.photos.length);
@@ -695,11 +701,83 @@
   ok('a ride with genuinely no media says so',
      document.getElementById('importMsg').textContent.includes('none'));
 
-  ok('an in-flight ride is not requested twice', (() => {
+  fetchCalls.length = 0;
+  fetchResponse = { ok: true, scanned: 0, downloaded: 0, videos: 0, rides: {} };
+  await Promise.all([fetchPhotosFor([bare[1].id]), fetchPhotosFor([bare[1].id])]);
+  ok('an in-flight ride is not requested twice', fetchCalls.length === 1);
+});
+
+// ---- rides whose track is not downloaded yet ----
+SUITES.push(async () => {
+  const ok = (l, c) => console.log((c ? 'PASS  ' : 'FAIL  ') + l);
+  const real = RIDES.find(r => r.hasTrack && r.photos.length === 0) || RIDES.find(r => r.hasTrack);
+
+  // A placeholder, shaped as the builder emits one.
+  const ghost = {
+    ...JSON.parse(JSON.stringify(real)), id: 990001, name: 'Untracked ride',
+    hasTrack: false, noGps: false, points: 0, track: [], centre: null,
+    bbox: null, label_at: null, far_km: 0, alt_range: null, photos: [],
+  };
+  const nogps = { ...ghost, id: 990002, name: 'No GPS ride', noGps: true };
+  RIDES.push(ghost, nogps);
+  byId.set(ghost.id, ghost); byId.set(nogps.id, nogps);
+
+  state.sets['Tracks'] = blankSet([real.id]);
+  state.active = 'Tracks';
+  render();
+
+  ok('a trackless ride cannot be selected by clicking', (() => {
     fetchCalls.length = 0;
-    fetchResponse = { ok: true, scanned: 0, downloaded: 0, videos: 0, rides: {} };
-    const first = fetchPhotosFor([bare[1].id]);
-    const second = fetchPhotosFor([bare[1].id]);
-    return Promise.all([first, second]).then(() => fetchCalls.length === 1);
+    const before = cur().ids.length;
+    toggleRide(ghost.id);
+    return cur().ids.length === before;
   })());
-})();
+
+  ok('clicking it asks for its track instead', fetchCalls.length === 1 &&
+     fetchCalls[0].url === '/api/streams/sync');
+  // toggleRide fires that fetch without awaiting it, and fetchTracksFor
+  // de-duplicates rides already in flight -- so the later calls here would
+  // silently no-op if the first were still running.
+  await flush();
+
+  ok('a ride with no GPS is never requested', (() => {
+    fetchCalls.length = 0;
+    toggleRide(nogps.id);
+    return fetchCalls.length === 0 && !cur().ids.includes(nogps.id);
+  })());
+
+  ok('drawing ignores rides without a track', (() => {
+    cur().ids.push(ghost.id);      // as an import might
+    render();
+    return drawableRides().every(r => r.hasTrack) &&
+           selectedRides().length > drawableRides().length;
+  })());
+  cur().ids = cur().ids.filter(id => id !== ghost.id);
+
+  // Fetching returns a complete rebuilt record, not a patch.
+  fetchResponse = {
+    ok: true, fetched: 1, failed: 0, empty: 0,
+    rides: { [ghost.id]: { ...ghost, hasTrack: true, points: 300,
+                           track: real.track, centre: real.centre,
+                           label_at: real.label_at, far_km: 4.2 } },
+  };
+  await fetchTracksFor([ghost.id], null, true);
+
+  ok('the fetched track replaces the placeholder', byId.get(ghost.id).hasTrack === true);
+  ok('it becomes drawable', drawableRides().some(r => r.id === ghost.id));
+  ok('and is selected, since clicking it meant to select it',
+     cur().ids.includes(ghost.id));
+
+  fetchResponse = { ok: true, fetched: 0, failed: 0, empty: 1, rides: {} };
+  await fetchTracksFor([990003], null, false);
+  ok('a ride with no GPS is reported, not silently skipped',
+     document.getElementById('importMsg').textContent.includes('no GPS'));
+
+  fetchResponse = { ok: false, error: 'session expired' };
+  await fetchTracksFor([990004], null, false);
+  ok('a failed track fetch reports instead of throwing',
+     document.getElementById('importMsg').textContent.includes('session expired'));
+});
+
+// Run the async suites strictly in order.
+(async () => { for (const suite of SUITES) await suite(); })();
