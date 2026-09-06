@@ -527,3 +527,77 @@
     return !!fresh.sets;
   })());
 }
+
+// ---- map framing is part of the layout ----
+{
+  const ok = (l, c) => console.log((c ? 'PASS  ' : 'FAIL  ') + l);
+  const kid = RIDES.filter(r => r.tags.includes(16) && r.sport === 'Ride').slice(0, 3);
+  state.sets['View'] = blankSet(kid.map(r => r.id));
+  state.active = 'View';
+  render();
+
+  ok('toggling legend view does not move the map', (() => {
+    map.setView([59.93, 10.72], 13);
+    const before = JSON.stringify([map.getCenter(), map.getZoom()]);
+    setLegendMode(true);
+    const mid = JSON.stringify([map.getCenter(), map.getZoom()]);
+    setLegendMode(false);
+    const after = JSON.stringify([map.getCenter(), map.getZoom()]);
+    return before === mid && mid === after;
+  })());
+
+  ok('save view records centre and zoom', (() => {
+    map.setView([59.95, 10.75], 14.25);
+    const v = saveView();
+    return v.center[0] === 59.95 && v.zoom === 14.25;
+  })());
+
+  ok('a saved view is restored instead of refitting', (() => {
+    map.setView([0, 0], 2);
+    const restored = frameFor(cur());
+    return restored && map.getCenter().lat === 59.95 && map.getZoom() === 14.25;
+  })());
+
+  ok('a set with no saved view falls back to fitting the rides', (() => {
+    state.sets['NoView'] = blankSet([kid[0].id]);
+    state.active = 'NoView';
+    map.setView([0, 0], 2);
+    const framed = frameFor(cur());
+    return framed && map.getCenter().lat !== 0;
+  })());
+
+  ok('fitting leaves room for the sidebar in editor mode', (() => {
+    setLegendMode(false);
+    fitTo(selectedRides());
+    return map._lastFitOpts.paddingTopLeft[0] === SIDEBAR_W + 30;
+  })());
+
+  ok('fitting uses the full width in legend view', (() => {
+    setLegendMode(true);
+    fitTo(selectedRides());
+    const pad = map._lastFitOpts.paddingTopLeft[0];
+    setLegendMode(false);
+    return pad === 30;
+  })());
+
+  ok('the view round-trips through export and import', (() => {
+    state.active = 'View';
+    map.setView([59.91, 10.68], 15.5);
+    saveView();
+    const saved = exportJson();
+    const j = JSON.parse(saved);
+    const res = importSelection(saved);
+    return j.view.zoom === 15.5 && cur().view.center[0] === 59.91 && !res.error;
+  })());
+
+  ok('switching selections restores each ones framing', (() => {
+    state.sets['Far'] = blankSet([kid[0].id]);
+    state.sets['Far'].view = { center: [60.5, 11.1], zoom: 9 };
+    state.active = 'Far';
+    frameFor(cur());
+    const far = map.getCenter().lat === 60.5;
+    state.active = 'View';
+    frameFor(cur());
+    return far && map.getCenter().lat === 59.91;
+  })());
+}

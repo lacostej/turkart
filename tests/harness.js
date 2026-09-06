@@ -28,7 +28,7 @@ global.fireDoc = (k, ev) => (docListeners[k] || []).slice().forEach(fn => fn(ev)
 global.navigator = { clipboard: { writeText(){} } };
 global.alert = () => {}; global.confirm = () => true; global.prompt = () => 'X';
 global.Blob = class {}; global.URL = { createObjectURL: () => '', revokeObjectURL(){} };
-global.setTimeout = () => {};
+global.setTimeout = (fn) => { if (typeof fn === 'function') fn(); };
 const winListeners = {};
 global.window = {
   innerHeight: 900,
@@ -58,13 +58,18 @@ global.L = {
   map: () => ({
     _loaded: false,
     addTo(){}, on(){},
-    setView(){ this._loaded = true; return this; },
-    fitBounds(b){ if (b && b._empty) throw new Error('Bounds are not valid.');
-                  this._loaded = true; return this; },
-    getCenter(){ this._check(); return {lat:1,lng:2}; },
-    getZoom(){ return this._loaded ? 12 : undefined; },
+    setView(c, z){ this._loaded = true;
+      this._c = { lat: Array.isArray(c) ? c[0] : c.lat, lng: Array.isArray(c) ? c[1] : c.lng };
+      if (z !== undefined) this._z = z; return this; },
+    fitBounds(b, o){ if (b && b._empty) throw new Error('Bounds are not valid.');
+      this._loaded = true; this._c = { lat: 59.9, lng: 10.7 }; this._z = 12;
+      this._lastFitOpts = o; return this; },
+    getCenter(){ this._check(); return this._c || { lat: 59.9, lng: 10.7 }; },
+    getZoom(){ return this._loaded ? (this._z === undefined ? 12 : this._z) : undefined; },
+    // Real invalidateSize pans when the container changes; if the page ever
+    // calls it on a mode switch, this makes that visible as a moved centre.
+    invalidateSize(){ this._c = { lat: this._c.lat + 0.01, lng: this._c.lng + 0.01 }; },
     dragging: { enable(){}, disable(){} },
-    invalidateSize(){},
     _check(){ if (!this._loaded) throw new Error('Set map center and zoom first.'); },
     latLngToLayerPoint(ll){ this._check();
       return { x: (ll.lng ?? ll[1]) * 100000, y: -(ll.lat ?? ll[0]) * 100000 }; },

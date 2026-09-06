@@ -239,11 +239,16 @@ _TEMPLATE = r"""<!doctype html>
     --line:#e2e2dd; --accent:#e2562a; --accent-soft:#fdece6;
   }
   * { box-sizing:border-box; }
+  /* The map fills the window and the sidebar floats over it, rather than the two
+     sharing a flex row. Toggling the sidebar then changes nothing about the map's
+     size, so the view cannot shift: resizing it made Leaflet re-centre on the new
+     container, which moved the composition every time legend view was entered. */
   body { margin:0; font:14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-         color:var(--ink); background:var(--bg); height:100vh; display:flex; }
-  #sidebar { width:440px; flex:none; background:var(--panel); border-right:1px solid var(--line);
-             display:flex; flex-direction:column; height:100vh; }
-  #map { flex:1; height:100vh; }
+         color:var(--ink); background:var(--bg); height:100vh; overflow:hidden; }
+  #map { position:absolute; inset:0; }
+  #sidebar { position:absolute; left:0; top:0; bottom:0; width:440px; z-index:1200;
+             background:var(--panel); border-right:1px solid var(--line);
+             display:flex; flex-direction:column; }
   header { padding:12px 16px 10px; border-bottom:1px solid var(--line); }
   h1 { margin:0 0 9px; font-size:15px; letter-spacing:.02em; text-transform:uppercase; }
   .setbar { display:flex; gap:5px; margin-bottom:10px; align-items:center; }
@@ -394,6 +399,7 @@ _TEMPLATE = r"""<!doctype html>
     <button id="ghosts">Show unselected</button>
     <button id="leaders">Hide photo lines</button>
     <button id="legendOn">Legend view</button>
+    <button id="saveView" title="remember this centre and zoom with the selection">Save view</button>
     <label class="tog" style="margin-left:auto">size
       <input type="range" id="psize" min="40" max="220" step="4" style="width:90px">
     </label>
@@ -425,6 +431,7 @@ _TEMPLATE = r"""<!doctype html>
   </div>
   <div id="legendbar">
     <button id="legendBack" title="Back to selector">&#8592;</button>
+    <button id="saveViewLegend" title="remember this centre and zoom">Save view</button>
   </div>
   <div id="chromehint">hold &#8679; or &#8997; to show controls</div>
 </div>
@@ -445,7 +452,7 @@ const TAG_WITH_KIDS = 16;
 // per-photo map positions, so a selection fully describes one poster layout.
 function blankSet(ids) {
   return { ids: ids || [], photos: {}, leaders: true, size: 72,
-           title: '', legendPos: null };
+           title: '', legendPos: null, view: null };
 }
 
 // A placement is {pos:[lat,lng], size:px}. Early builds stored a bare [lat,lng],
@@ -1003,8 +1010,9 @@ function setLegendMode(on) {
   document.body.classList.toggle('legendmode', on);
   document.body.classList.remove('chrome');
   document.getElementById('legend').hidden = !on;
-  // The sidebar collapses in legend mode, so the map has to re-measure itself.
-  setTimeout(() => { map.invalidateSize(); layoutPins(); }, 0);
+  // No invalidateSize here on purpose. The map is the same size in both modes --
+  // the sidebar floats over it -- so there is nothing to re-measure, and calling
+  // it would pan the map by half the sidebar width and move the composition.
   if (on) { renderLegend(); flashHint(); }
 }
 
@@ -1030,6 +1038,7 @@ function exportJson() {
     name: state.active,
     title: set.title || '',
     legendPos: set.legendPos || null,
+    view: set.view || null,
     leaders: set.leaders !== false,
     photoSize: set.size,
     rides: sel.map((r, i) => ({
@@ -1094,11 +1103,14 @@ function importSelection(text) {
     size: payload.photoSize || 72,
     title: payload.title || '',
     legendPos: payload.legendPos || null,
+    view: payload.view || null,
   };
   state.active = name;
   persist();
   return { name: name, count: ids.length, missing: missing };
 }
+
+const SIDEBAR_W = 440;
 
 function fitTo(rides) {
   if (!rides.length) return false;
@@ -1106,8 +1118,34 @@ function fitTo(rides) {
   rides.forEach(r => r.track.forEach(p => b.extend([p[0], p[1]])));
   // fitBounds throws on empty bounds, which happens if every ride is trackless.
   if (!b.isValid || !b.isValid()) return false;
-  map.fitBounds(b, { padding: [30, 30] });
+  // The sidebar floats over the map's left edge, so fitted content has to clear
+  // it or half the selection lands underneath.
+  const left = legendMode ? 30 : SIDEBAR_W + 30;
+  map.fitBounds(b, { paddingTopLeft: [left, 30], paddingBottomRight: [30, 30] });
   return true;
+}
+
+// The framing is part of the layout: which corner of the map the composition
+// sits in matters as much as where the photos are. Saved explicitly rather than
+// on every pan, so drifting around while looking at something cannot quietly
+// replace a framing that was deliberate.
+function saveView() {
+  const c = map.getCenter();
+  cur().view = { center: [+c.lat.toFixed(6), +c.lng.toFixed(6)], zoom: map.getZoom() };
+  persist();
+  return cur().view;
+}
+
+function applyView(set) {
+  if (!set || !set.view || !Array.isArray(set.view.center)) return false;
+  map.setView(set.view.center, set.view.zoom);
+  return true;
+}
+
+// Restore a saved framing if there is one, otherwise frame the rides.
+function frameFor(set) {
+  if (applyView(set)) return true;
+  return fitTo(selectedRides());
 }
 
 // ---------------------------------------------------------------- wiring
@@ -1115,7 +1153,7 @@ function fitTo(rides) {
   document.getElementById(id).addEventListener('input', render));
 
 document.getElementById('setPicker').onchange = e => {
-  state.active = e.target.value; persist(); render(); fitTo(selectedRides());
+  state.active = e.target.value; persist(); render(); frameFor(cur());
 };
 document.getElementById('setNew').onclick = () => {
   const name = prompt('Name for the new selection:', `Selection ${Object.keys(state.sets).length + 1}`);
@@ -1158,6 +1196,20 @@ document.getElementById('invert').onclick = () => {
   });
   persist(); render();
 };
+function onSaveView(buttonId) {
+  return () => {
+    const view = saveView();
+    const btn = document.getElementById(buttonId);
+    const was = btn.textContent;
+    btn.textContent = `saved z${view.zoom.toFixed(2)}`;
+    setTimeout(() => { btn.textContent = was; }, 1400);
+    const out = document.getElementById('out');
+    if (document.activeElement !== out) out.value = exportJson();
+  };
+}
+document.getElementById('saveView').onclick = onSaveView('saveView');
+document.getElementById('saveViewLegend').onclick = onSaveView('saveViewLegend');
+
 document.getElementById('legendOn').onclick = () => setLegendMode(true);
 document.getElementById('legendBack').onclick = () => setLegendMode(false);
 const legendTitle = document.getElementById('legendTitle');
@@ -1238,7 +1290,7 @@ function applyImport(text) {
   msg.textContent = `imported "${result.name}" -- ${result.count} ride(s)` +
     (result.missing.length ? `, ${result.missing.length} not in this build (skipped)` : '');
   render();
-  fitTo(selectedRides());
+  frameFor(cur());
 }
 
 document.getElementById('importText').onclick = () =>
@@ -1309,7 +1361,8 @@ map.on('zoomend', layoutPins);
 // The view must exist before the first render: render() lays out the pins, and
 // that projects coordinates. Falling back to a world view keeps an empty or
 // trackless data set from leaving the map unusable.
-if (!fitTo(cur().ids.length ? selectedRides() : RIDES)) map.setView([0, 0], 2);
+if (!applyView(cur()) &&
+    !fitTo(cur().ids.length ? selectedRides() : RIDES)) map.setView([0, 0], 2);
 render();
 showZoom();
 </script>

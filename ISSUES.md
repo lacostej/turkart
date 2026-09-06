@@ -10,7 +10,7 @@ needed to compose has to work there.
 
 ---
 
-## 1. Cannot save while in legend view
+## 1. Cannot save while in legend view — *partly fixed*
 
 Legend view is where photo placement and map framing actually happen, but Save /
 Copy JSON / Import live in the sidebar, which legend view hides. So the work done
@@ -19,9 +19,10 @@ in the place it is done cannot be exported from there.
 Changes are not lost — every edit still writes to `localStorage` — but exporting
 means leaving the view, which loses the framing.
 
-Options: put a minimal save control in the legend chrome (revealed with ⇧/⌥
-alongside the rest); or float a small always-available control; or auto-write the
-selection somewhere the CLI can read without an explicit Save.
+**Save view** now exists in both the sidebar and the legend chrome (hold ⇧/⌥),
+so the framing can be captured without leaving the view. Exporting the JSON from
+legend view still is not possible — deferred, since the map no longer moves when
+switching, so leaving to export costs nothing.
 
 ## 2. Photo size does not track zoom
 
@@ -40,7 +41,7 @@ migration for placements that currently store a pixel size.
 Open question: should a photo scale *fully* with zoom (fixed ground size), or
 partially, so it stays legible when zoomed out?
 
-## 3. Entering legend view moves the map
+## 3. Entering legend view moves the map — *fixed*
 
 Confirmed cause: `setLegendMode()` calls `map.invalidateSize()`, whose default is
 `pan: true`. Leaflet then pans by the difference between the old and new
@@ -49,11 +50,10 @@ container centres — the sidebar is 440px wide, so the map shifts by ~220px.
 `invalidateSize({pan: false})` only changes which corner is anchored; the content
 still moves relative to the viewport.
 
-Better direction, and what was actually asked for: **do not resize the map at
-all.** Make the map fill the window permanently and render the sidebar as an
-overlay on top of it. Entering legend view then only hides an overlay — no
-resize, no reflow, nothing moves. This also removes the `invalidateSize` call and
-the pin re-layout that follows it.
+Fixed by that route: the map fills the window permanently and the sidebar floats
+over it, so toggling changes nothing about the map's size and there is nothing to
+re-measure. `invalidateSize` is gone. Fitting now pads by the sidebar width in
+editor mode so fitted rides do not land underneath it.
 
 ## 4. Legend toggle and close are in different places
 
