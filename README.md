@@ -215,6 +215,85 @@ Both are one-way and one-time. Once the page has been loaded once on every
 browser in use, `LEGACY_SETS` / `LEGACY_FLAT` and the migration branch in
 `loadState()` can be deleted outright.
 
+## Privacy
+
+turkart is a local tool. **Nothing you fetch is uploaded anywhere** — no ride,
+track, photo or selection ever leaves your machine. The page runs off your own
+filesystem or a localhost server.
+
+It does make three kinds of outbound request, and it is worth knowing all three:
+
+- **Strava**, to fetch your own data.
+- **A tile provider**, to draw the map — whichever layer is selected: CARTO,
+  Esri, OpenStreetMap, CyclOSM (OSM France) or OpenTopoMap.
+- **`unpkg.com`**, which serves the Leaflet library on every page load.
+
+Links to individual activities go to `strava.com`, but only if you click them.
+
+**Everything it holds is sensitive, in roughly this order:**
+
+| path | holds | gitignored |
+|---|---|---|
+| `.secrets/session.json` | your **Strava session cookie** — unscoped, full account access | yes, and `chmod 600` |
+| `.secrets/carto` | CARTO API key | yes |
+| `LOCAL/` | raw devtools captures, which contain **live cookies** | yes |
+| `data/streams/` | GPS traces | yes |
+| `data/photos/` | your ride photos, full resolution | yes |
+| `build/explore.html` | GPS traces, photo paths, **and the CARTO key** | yes |
+
+Two things are worth being explicit about:
+
+**GPS traces are home addresses.** Every ride starts at your front door, so a
+track's start point identifies where you live — and the same is true of any
+poster or screenshot made from one. This is the reason `build/` is gitignored
+even though it is only a generated artefact, and the reason photos are kept
+locally rather than published anywhere. If you share a poster, look at what the
+start points give away first.
+
+**The tile provider sees where you are looking.** Panning sends a request per
+tile to whichever provider is active, which reveals the area being viewed —
+though never the tracks themselves, which are drawn locally on top. `--no-carto`
+avoids sending a key with those requests, but not the requests. Self-hosted
+tiles would remove this entirely; see the hosting notes.
+
+Photos are downloaded at full resolution (1500×2000 and up), and the coordinates
+Strava records for each one are stored in `data/photos/index.json` — that is what
+draws a photo's line back to where it was taken, and it is also a precise record
+of where you were. Treat `data/photos/` as you would the originals.
+
+Selections live in the browser's `localStorage` under `turkart-selections`, on
+your machine only. Clearing site data loses them; **Save** writes a JSON file
+that does not depend on the browser.
+
+### Sharing this project
+
+Committing the code is safe: the ignore rules cover credentials, ride data and
+generated pages, and every commit so far was checked for leaked values by hand.
+
+There is **no automated secret scanning**, so that guarantee only holds as long as
+someone keeps checking. If you fork or publish this, run `git status --short`
+before the first commit and actually read it — the trap is a capture file saved
+somewhere other than `LOCAL/`, which nothing ignores.
+
+## Making it usable by other people
+
+Being evaluated, not built. The rough shape is either **each person runs their
+own instance** (Docker, self-hosted) or **a small shared host for friends**.
+
+The current cookie-based auth cannot be used for either — it would mean handing
+someone else's server an unscoped Strava session cookie — so a multi-user version
+has to move to the official API with OAuth. That swap has a known cost: Strava's
+API does not expose **activity tags**, which is how the "with kids" ride set is
+chosen here, so tagging would have to become something turkart stores itself.
+
+The binding constraint is not engineering. Strava's API limits are per
+application, and self-service access caps at **10 athletes**; going beyond that
+needs Strava's approval, which is explicitly not guaranteed. A handful of friends
+fits inside that comfortably; anything public does not, without asking first.
+
+Working notes on all of this are kept locally in `LOCAL/hosting.md`
+(unversioned), pending a proper issue.
+
 ## Tests
 
 ```bash
