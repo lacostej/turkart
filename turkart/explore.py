@@ -92,28 +92,7 @@ def build_rides(
         ts = raw.get("start_date_local_raw")
         start = datetime.fromtimestamp(ts, tz=timezone.utc) if ts else None
 
-        # A merged ride inherits the media of every activity it absorbed. Paths
-        # stay relative to the built page, which reaches data/photos via a
-        # symlink, so the page works over both file:// and --serve.
-        photos = []
-        for member in (raw.get("merged_from") or [raw["id"]]):
-            for item in photo_index.get(str(member), []):
-                if item.get("is_video"):
-                    continue
-                rel = f"photos/{member}/{item['photo_id']}.jpg"
-                if (store.root / rel).exists():
-                    # `at` is where the photo was taken; a few have no fix, and
-                    # those simply get no leader line back to the route.
-                    at = (
-                        [round(item["lat"], 6), round(item["lng"], 6)]
-                        if item.get("lat") is not None and item.get("lng") is not None
-                        else None
-                    )
-                    photos.append(
-                        {"id": item["photo_id"], "src": rel,
-                         "caption": item.get("caption") or "", "at": at,
-                         "w": item.get("width"), "h": item.get("height")}
-                    )
+        photos = photo_records(store, raw.get("merged_from") or [raw["id"]], photo_index)
 
         rides.append(
             {
@@ -152,6 +131,43 @@ def build_rides(
 
     rides.sort(key=lambda r: r["ts"] or 0)
     return rides
+
+
+def photo_records(
+    store: Store, members: list, photo_index: dict | None = None
+) -> list[dict]:
+    """Page-ready photo entries for one ride.
+
+    A merged ride inherits the media of every activity it absorbed. Paths stay
+    relative to the built page, which reaches data/photos through a symlink, so
+    they resolve over both file:// and --serve. Shared with the fetch endpoint,
+    so photos pulled from the UI come back in exactly the shape the page already
+    renders.
+    """
+    from .photos import load_index
+
+    index = photo_index if photo_index is not None else load_index(store)
+    records = []
+    for member in members:
+        for item in index.get(str(member), []):
+            if item.get("is_video"):
+                continue
+            rel = f"photos/{member}/{item['photo_id']}.jpg"
+            if not (store.root / rel).exists():
+                continue
+            # `at` is where the photo was taken; a few have no fix, and those
+            # simply get no leader line back to the route.
+            at = (
+                [round(item["lat"], 6), round(item["lng"], 6)]
+                if item.get("lat") is not None and item.get("lng") is not None
+                else None
+            )
+            records.append(
+                {"id": item["photo_id"], "src": rel,
+                 "caption": item.get("caption") or "", "at": at,
+                 "w": item.get("width"), "h": item.get("height")}
+            )
+    return records
 
 
 def summarise(rides: list[dict], max_gap_km: float = 40.0) -> dict:
@@ -298,6 +314,9 @@ _TEMPLATE = r"""<!doctype html>
                      background:#fff; border:2px solid var(--accent); border-radius:50%;
                      cursor:nwse-resize; box-shadow:0 1px 3px rgba(0,0,0,.4); }
   .strip .cnt { font-size:10px; color:var(--muted); align-self:center; white-space:nowrap; }
+  .fetchrow { padding:0 16px 8px 50px; }
+  .fetchrow button { font-size:11px; padding:3px 8px; }
+  .fetchrow .note { font-size:11px; color:var(--muted); margin-left:7px; }
   #export { padding:9px 16px; border-top:1px solid var(--line); background:#fbfbfa; }
   #importMsg { font-size:11px; margin-top:6px; color:var(--muted); min-height:0; }
   #importMsg.bad { color:var(--accent); }
@@ -425,7 +444,8 @@ _TEMPLATE = r"""<!doctype html>
       <button id="download">Save</button>
       <button id="importText">Import pasted</button>
       <button id="importFile">Load file…</button>
-      <button id="resetPhotos">Reset photo positions</button>
+      <button id="fetchAll">Fetch photos for selection</button>
+    <button id="resetPhotos">Reset photo positions</button>
     </div>
     <div id="importMsg"></div>
     <input type="file" id="filePicker" accept="application/json,.json" hidden>
@@ -576,6 +596,51 @@ function fmtDuration(s) {
   const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
   return h ? `${h}h${String(m).padStart(2, '0')}` : `${m}min`;
 }
+// The photo-fetch endpoint only exists behind `explore --serve`; opened as a
+// file:// page there is nothing to call, so the controls are simply not offered.
+const CAN_FETCH = location.protocol === 'http:' || location.protocol === 'https:';
+const fetching = new Set();
+
+async function fetchPhotosFor(ids, label) {
+  const wanted = ids.filter(id => !fetching.has(id));
+  if (!wanted.length) return;
+  wanted.forEach(id => fetching.add(id));
+  if (label) { label.disabled = true; label.textContent = 'fetching…'; }
+  render();
+  try {
+    const res = await fetch('/api/photos/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: wanted }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'fetch failed');
+    // Splice the new records straight into the loaded rides, so the selection,
+    // the framing and every placement survive -- no rebuild, no reload.
+    let added = 0;
+    for (const [id, photos] of Object.entries(data.rides || {})) {
+      const ride = byId.get(Number(id));
+      if (!ride) continue;
+      added += photos.length - ride.photos.length;
+      ride.photos = photos;
+    }
+    setFetchNote(`fetched ${data.downloaded} photo(s)` +
+      (data.videos ? `, skipped ${data.videos} video(s)` : '') +
+      (added === 0 && data.downloaded === 0 ? ' — these rides have none' : ''));
+  } catch (err) {
+    setFetchNote(String(err.message || err), true);
+  } finally {
+    wanted.forEach(id => fetching.delete(id));
+    render();
+  }
+}
+
+function setFetchNote(text, bad) {
+  const msg = document.getElementById('importMsg');
+  msg.className = bad ? 'bad' : '';
+  msg.textContent = text;
+}
+
 const previewEl = document.getElementById('preview');
 function showPreview(photo, anchor) {
   previewEl.src = photo.src;
@@ -728,6 +793,19 @@ function render() {
     row.onmouseleave = () => highlight(r.id, false);
     row.onclick = () => toggleRide(r.id);
     block.appendChild(row);
+
+    // A selected ride with no photos yet can have them pulled on demand, which
+    // is why media is not synced for the whole history up front.
+    if (on && CAN_FETCH && !r.photos.length) {
+      const row = document.createElement('div');
+      row.className = 'fetchrow';
+      const btn = document.createElement('button');
+      btn.textContent = fetching.has(r.id) ? 'fetching…' : 'Fetch photos';
+      btn.disabled = fetching.has(r.id);
+      btn.onclick = e => { e.stopPropagation(); fetchPhotosFor([r.id], btn); };
+      row.appendChild(btn);
+      block.appendChild(row);
+    }
 
     // Photo strip, only for chosen rides -- picking photos for a ride that is
     // not on the poster has nowhere to show them.
@@ -1276,6 +1354,18 @@ psize.oninput = () => {
 };
 document.getElementById('zoomSel').onclick = () => fitTo(selectedRides());
 document.getElementById('ghosts').onclick = () => { showGhosts = !showGhosts; render(); };
+const fetchAllBtn = document.getElementById('fetchAll');
+if (!CAN_FETCH) {
+  fetchAllBtn.disabled = true;
+  fetchAllBtn.title = 'only available when the page is served (explore --serve)';
+} else {
+  fetchAllBtn.onclick = () => {
+    const missing = selectedRides().filter(r => !r.photos.length).map(r => r.id);
+    if (!missing.length) { setFetchNote('every selected ride already has its photos'); return; }
+    fetchPhotosFor(missing, fetchAllBtn);
+  };
+}
+
 document.getElementById('resetPhotos').onclick = () => {
   for (const r of selectedRides()) {
     const placed = cur().photos[r.id];

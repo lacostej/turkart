@@ -637,3 +637,69 @@
     return JSON.stringify([map.getCenter(), map.getZoom()]) === before;
   })());
 }
+
+// ---- fetching photos from the UI ----
+// Fully sequential: fetchPhotosFor de-duplicates rides already in flight, so
+// overlapping calls would silently no-op and make the assertions meaningless.
+(async () => {
+  const ok = (l, c) => console.log((c ? 'PASS  ' : 'FAIL  ') + l);
+  const bare = RIDES.filter(r => !r.photos.length).slice(0, 3);
+  const full = RIDES.find(r => r.photos.length);
+
+  state.sets['Fetch'] = blankSet([bare[0].id, bare[1].id, full.id]);
+  state.active = 'Fetch';
+  render();
+
+  ok('fetch is offered only when the page is served', CAN_FETCH === true);
+
+  fetchCalls.length = 0;
+  fetchResponse = { ok: true, scanned: 0, downloaded: 0, videos: 0, rides: {} };
+  await fetchPhotosFor(selectedRides().filter(r => !r.photos.length).map(r => r.id));
+  ok('it posts to the photo endpoint', fetchCalls[0].url === '/api/photos/sync');
+  ok('it asks only for rides that have no photos', (() => {
+    const asked = fetchCalls[0].body.ids;
+    return asked.includes(bare[0].id) && asked.includes(bare[1].id) &&
+           !asked.includes(full.id);
+  })());
+
+  fetchResponse = {
+    ok: true, scanned: 1, downloaded: 2, videos: 1,
+    rides: { [bare[0].id]: [
+      { id: 'p1', src: 'photos/x/p1.jpg', caption: '', at: [59.9, 10.7], w: 1536, h: 2048 },
+      { id: 'p2', src: 'photos/x/p2.jpg', caption: '', at: null, w: 2048, h: 1536 },
+    ] },
+  };
+  await fetchPhotosFor([bare[0].id]);
+  ok('fetched photos are spliced into the ride in place',
+     byId.get(bare[0].id).photos.length === 2);
+  ok('a photo with no coordinates survives the splice',
+     byId.get(bare[0].id).photos[1].at === null);
+  ok('the selection and its size survive a fetch', cur().ids.length === 3);
+  ok('videos are reported, not treated as photos',
+     document.getElementById('importMsg').textContent.includes('video'));
+
+  fetchCalls.length = 0;
+  await fetchPhotosFor(selectedRides().filter(r => !r.photos.length).map(r => r.id));
+  ok('a ride that now has photos is not re-fetched',
+     !fetchCalls.length || !fetchCalls[0].body.ids.includes(bare[0].id));
+
+  fetchResponse = { ok: false, error: 'session expired' };
+  await fetchPhotosFor([bare[1].id]);
+  ok('a failed fetch reports instead of throwing',
+     document.getElementById('importMsg').textContent.includes('session expired'));
+  ok('a failed fetch leaves the ride untouched', byId.get(bare[1].id).photos.length === 0);
+
+  fetchResponse = { ok: true, scanned: 1, downloaded: 0, videos: 0,
+                    rides: { [bare[2].id]: [] } };
+  await fetchPhotosFor([bare[2].id]);
+  ok('a ride with genuinely no media says so',
+     document.getElementById('importMsg').textContent.includes('none'));
+
+  ok('an in-flight ride is not requested twice', (() => {
+    fetchCalls.length = 0;
+    fetchResponse = { ok: true, scanned: 0, downloaded: 0, videos: 0, rides: {} };
+    const first = fetchPhotosFor([bare[1].id]);
+    const second = fetchPhotosFor([bare[1].id]);
+    return Promise.all([first, second]).then(() => fetchCalls.length === 1);
+  })());
+})();

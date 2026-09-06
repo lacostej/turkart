@@ -166,6 +166,16 @@ as good a poster backdrop. CyclOSM, Esri Topo and OpenTopoMap are also offered.
   the current one.
 - The same file drives `photos sync --selection`, so you can pick rides in the
   browser and fetch only their photos.
+- **Fetch photos** — under `--serve`, a selected ride with no photos yet shows a
+  *Fetch photos* button, and the toolbar has *Fetch photos for selection*. The
+  page calls a small local endpoint (`POST /api/photos/sync`), and the results
+  are spliced into the loaded rides, so the selection, framing and every photo
+  placement survive — no rebuild, no reload. Over `file://` the buttons are
+  disabled with a note, since there is no server to call.
+
+This is deliberately lazy: media is not synced for the whole history up front,
+only for the rides actually picked. The same pattern is what a hosted version
+would need — a full sync costs one API request per activity.
 
 CLI filters mirror the UI, e.g. `--tag 16 --sport-type-filter Ride --after 2026-01-01`.
 
@@ -232,6 +242,7 @@ enough pins to trigger the projection path, without one there are not.
 | `turkart/geo.py` | RDP simplification, bounding boxes, ride clustering |
 | `turkart/merge.py` | detect and fold together split recordings |
 | `turkart/photos.py` | scrape and download ride media |
+| `turkart/fetchapi.py` | the local endpoint the page calls to fetch photos |
 | `turkart/explore.py` | builds the selector page |
 | `turkart/cli.py` | command line |
 

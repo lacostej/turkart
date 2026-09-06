@@ -26,6 +26,16 @@ global.document = {
 };
 global.fireDoc = (k, ev) => (docListeners[k] || []).slice().forEach(fn => fn(ev));
 global.navigator = { clipboard: { writeText(){} } };
+// Served page by default, so the fetch-photos controls are exercised. Tests
+// that care about the file:// case override this before loading the page.
+global.location = global.location || { protocol: 'http:' };
+// Records calls instead of hitting the network; tests drive the response.
+global.fetchCalls = [];
+global.fetchResponse = { ok: true, scanned: 0, downloaded: 0, videos: 0, rides: {} };
+global.fetch = (url, opts) => {
+  fetchCalls.push({ url, body: JSON.parse((opts && opts.body) || '{}') });
+  return Promise.resolve({ json: () => Promise.resolve(fetchResponse) });
+};
 global.alert = () => {}; global.confirm = () => true; global.prompt = () => 'X';
 global.Blob = class {}; global.URL = { createObjectURL: () => '', revokeObjectURL(){} };
 global.setTimeout = (fn) => { if (typeof fn === 'function') fn(); };

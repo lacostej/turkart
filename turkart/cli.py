@@ -575,7 +575,7 @@ def _explore_build(args, store: Store) -> int:
     print(f"\nwrote {path} ({path.stat().st_size / 1e6:.1f} MB), basemap: {basemap}")
 
     if args.serve:
-        return _serve(path, args.serve, open_browser=args.open)
+        return _serve(path, args.serve, open_browser=args.open, store=store)
     if args.open:
         import webbrowser
 
@@ -583,7 +583,7 @@ def _explore_build(args, store: Store) -> int:
     return 0
 
 
-def _serve(path: Path, port: int, open_browser: bool) -> int:
+def _serve(path: Path, port: int, open_browser: bool, store: Store) -> int:
     """Serve the built page over localhost until interrupted.
 
     Falls back to a free port rather than dying on EADDRINUSE: the default 8000
@@ -595,9 +595,31 @@ def _serve(path: Path, port: int, open_browser: bool) -> int:
     import http.server
     import webbrowser
 
-    handler = functools.partial(
-        http.server.SimpleHTTPRequestHandler, directory=str(path.parent.resolve())
-    )
+    from . import fetchapi
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        """Static files, plus the small photo-fetch API the page calls."""
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length else b""
+            try:
+                status, payload = fetchapi.handle(store, self.path, body)
+            except Exception as exc:  # never take the server down for one request
+                status, payload = 500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            data = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, fmt, *args):
+            # Quieten per-tile and per-photo GET noise; keep API calls visible.
+            if self.command == "POST" or "api" in self.path:
+                super().log_message(fmt, *args)
+
+    handler = functools.partial(Handler, directory=str(path.parent.resolve()))
 
     httpd = None
     for candidate in (port, 0):
