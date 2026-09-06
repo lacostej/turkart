@@ -433,10 +433,11 @@ _TEMPLATE = r"""<!doctype html>
 <script>
 const RIDES = __RIDES__;
 const byId = new Map(RIDES.map(r => [r.id, r]));
-// Deliberately keeps its original name through the rename to turkart: this key
-// holds every saved selection, and changing it would orphan them in the browser.
-const STORAGE = 'strava-poster-v2';
-const LEGACY = 'strava-poster-selection';
+const STORAGE = 'turkart-selections';
+// Older key names, newest first. Migrated into STORAGE once at load and then
+// deleted, so this pair can be removed outright after one page load.
+const LEGACY_SETS = 'strava-poster-v2';        // named sets, pre-rename
+const LEGACY_FLAT = 'strava-poster-selection'; // a bare id array, before named sets
 const TAG_WITH_KIDS = 16;
 
 // ---------------------------------------------------------------- state
@@ -454,15 +455,37 @@ function placement(value, fallbackSize) {
   return { pos: value.pos, size: value.size || fallbackSize };
 }
 
+function readKey(key) {
+  try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; }
+}
+
+function dropKeys(...keys) {
+  for (const key of keys) {
+    try { localStorage.removeItem(key); } catch (e) {}
+  }
+}
+
 function loadState() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(STORAGE) || 'null');
-    if (raw && raw.sets) return raw;
-  } catch (e) {}
-  // Carry over a selection made before named sets existed.
-  let legacy = [];
-  try { legacy = JSON.parse(localStorage.getItem(LEGACY) || '[]'); } catch (e) {}
-  return { active: 'Selection 1', sets: { 'Selection 1': blankSet(legacy.filter(i => byId.has(i))) } };
+  const current = readKey(STORAGE);
+  if (current && current.sets) return current;
+
+  // Migrate from the pre-rename key, then drop it so this only happens once.
+  const previous = readKey(LEGACY_SETS);
+  if (previous && previous.sets) {
+    try { localStorage.setItem(STORAGE, JSON.stringify(previous)); } catch (e) {}
+    dropKeys(LEGACY_SETS, LEGACY_FLAT);
+    return previous;
+  }
+
+  // Older still: a bare array of ids, from before selections had names.
+  const flat = readKey(LEGACY_FLAT);
+  const ids = Array.isArray(flat) ? flat.filter(i => byId.has(i)) : [];
+  const state = { active: 'Selection 1', sets: { 'Selection 1': blankSet(ids) } };
+  if (ids.length) {
+    try { localStorage.setItem(STORAGE, JSON.stringify(state)); } catch (e) {}
+    dropKeys(LEGACY_FLAT);
+  }
+  return state;
 }
 
 let state = loadState();

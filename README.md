@@ -191,6 +191,20 @@ possible to get stuck.
 > The attribution control deliberately stays visible. OSM and CARTO both require
 > attribution, and a screenshot without it is not licensed for sharing.
 
+### Stored selections
+
+Selections live in the browser under `turkart-selections`. Two older key names
+are migrated into it once at load and then deleted:
+
+| key | held |
+|---|---|
+| `strava-poster-v2` | named sets, before the rename |
+| `strava-poster-selection` | a bare array of ids, before selections had names |
+
+Both are one-way and one-time. Once the page has been loaded once on every
+browser in use, `LEGACY_SETS` / `LEGACY_FLAT` and the migration branch in
+`loadState()` can be deleted outright.
+
 ## Tests
 
 ```bash

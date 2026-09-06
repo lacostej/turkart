@@ -3,7 +3,9 @@ const store = {};
 global.localStorage = {
   getItem: k => (k in store ? store[k] : null),
   setItem: (k, v) => { store[k] = String(v); },
+  removeItem: k => { delete store[k]; },
 };
+global.storageDump = () => Object.keys(store);
 const mkEl = () => ({
   value: '', textContent: '', innerHTML: '', className: '', src: '', title: '',
   style: {}, checked: false, scrollTop: 0, scrollLeft: 0, dataset: {},

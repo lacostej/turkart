@@ -427,3 +427,103 @@
     return !!r.error;
   })());
 }
+
+// ---- selections and storage ----
+// Restored: this suite was written early on and then lost when the test files
+// were consolidated, which is how the key migration briefly went uncovered.
+{
+  const ok = (l, c) => console.log((c ? 'PASS  ' : 'FAIL  ') + l);
+  const kid = RIDES.filter(r => r.tags.includes(16) && r.sport === 'Ride').slice(0, 4);
+  const withPhotos = RIDES.find(r => r.photos.length >= 2);
+
+  ok('two named sets are independent', (() => {
+    state.sets['A'] = blankSet([kid[0].id]);
+    state.sets['B'] = blankSet([kid[1].id, kid[2].id]);
+    state.active = 'A';
+    const a = selectedRides().map(r => r.id);
+    state.active = 'B';
+    const b = selectedRides().map(r => r.id);
+    return a.length === 1 && b.length === 2 && a[0] !== b[0];
+  })());
+
+  ok('selection order is preserved, not sorted', (() => {
+    state.active = 'A';
+    state.sets['A'] = blankSet([kid[3].id, kid[0].id, kid[1].id]);
+    return JSON.stringify(selectedRides().map(r => r.id)) ===
+           JSON.stringify([kid[3].id, kid[0].id, kid[1].id]);
+  })());
+
+  ok('photo placement is per-selection, not global', (() => {
+    state.sets['A'] = blankSet([withPhotos.id]);
+    state.active = 'A';
+    togglePhoto(withPhotos, withPhotos.photos[0], 0);
+    state.sets['B'] = blankSet([withPhotos.id]);
+    state.active = 'B';
+    const none = Object.keys(cur().photos).length === 0;
+    state.active = 'A';
+    return none && Object.keys(cur().photos[withPhotos.id]).length === 1;
+  })());
+
+  ok('deselecting a ride drops its photo placements', (() => {
+    toggleRide(withPhotos.id);
+    return !cur().photos[withPhotos.id] && !cur().ids.includes(withPhotos.id);
+  })());
+
+  ok('state survives a reload', (() => {
+    state.sets['A'] = blankSet([kid[0].id, kid[1].id]);
+    persist();
+    const before = JSON.stringify(state);
+    return JSON.stringify(loadState()) === before;
+  })());
+
+  // ---- key migration, one-time and one-way ----
+  const clearAll = () =>
+    ['turkart-selections', 'strava-poster-v2', 'strava-poster-selection']
+      .forEach(k => localStorage.removeItem(k));
+
+  ok('pre-rename named sets migrate to the new key and the old one is dropped', (() => {
+    clearAll();
+    localStorage.setItem('strava-poster-v2', JSON.stringify({
+      active: 'Old', sets: { Old: { ids: [kid[0].id, kid[1].id], photos: {} } },
+    }));
+    const migrated = loadState();
+    const keys = storageDump();
+    return migrated.sets['Old'].ids.length === 2 &&
+           keys.includes('turkart-selections') &&
+           !keys.includes('strava-poster-v2');
+  })());
+
+  ok('the oldest flat id array still migrates', (() => {
+    clearAll();
+    localStorage.setItem('strava-poster-selection', JSON.stringify([kid[0].id, kid[1].id]));
+    const migrated = loadState();
+    return migrated.sets['Selection 1'].ids.length === 2 &&
+           !storageDump().includes('strava-poster-selection');
+  })());
+
+  ok('the new key wins over a stale old one', (() => {
+    clearAll();
+    localStorage.setItem('turkart-selections', JSON.stringify({
+      active: 'New', sets: { New: { ids: [kid[2].id], photos: {} } },
+    }));
+    localStorage.setItem('strava-poster-v2', JSON.stringify({
+      active: 'Stale', sets: { Stale: { ids: [kid[0].id, kid[1].id], photos: {} } },
+    }));
+    const loaded = loadState();
+    return loaded.active === 'New' && loaded.sets['New'].ids.length === 1;
+  })());
+
+  ok('nothing stored yields an empty first selection, and writes nothing', (() => {
+    clearAll();
+    const fresh = loadState();
+    return fresh.sets['Selection 1'].ids.length === 0 &&
+           !storageDump().includes('turkart-selections');
+  })());
+
+  ok('unreadable stored JSON does not throw', (() => {
+    clearAll();
+    localStorage.setItem('turkart-selections', '{not json');
+    const fresh = loadState();
+    return !!fresh.sets;
+  })());
+}
