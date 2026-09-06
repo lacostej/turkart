@@ -239,6 +239,12 @@ Track points in the built page are `[lat, lng, metres_along, altitude_m]` — th
 other streams are carried through simplification by index, so a sub-range of a
 ride can be measured without reloading full-resolution data.
 
+## Known issues
+
+Raised and not yet fixed — see [ISSUES.md](ISSUES.md). Mostly about legend view
+being the composing surface rather than a preview: saving is not reachable from
+it, photo sizes do not track zoom, and entering it shifts the map.
+
 ## Not built yet
 
 - **Poster renderer** — the end goal. Selections export as JSON with ride
