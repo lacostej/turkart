@@ -44,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
     sync.add_argument("--keywords", default="")
     sync.add_argument("--pages", type=int, default=200, help="max pages to walk")
     sync.add_argument("--per-page", type=int, default=20)
+    sync.add_argument("--full", action="store_true",
+                      help="walk every page instead of stopping at known activities")
 
     lst = acts.add_parser("list", help="show indexed rides")
     lst.add_argument("--after", type=_parse_date, help="YYYY-MM-DD, inclusive")
@@ -63,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
     fetch.add_argument("--before", type=_parse_date)
     fetch.add_argument("--ids", nargs="*", type=int, help="explicit activity ids")
     fetch.add_argument("--refresh", action="store_true", help="re-fetch already-stored tracks")
+    fetch.add_argument("--selection", type=Path, metavar="FILE",
+                       help="a selection.json saved from the explorer; fetches exactly "
+                            "those rides (merged rides expand to their members)")
     fetch.add_argument("--tag", action="append", type=int)
     fetch.add_argument("--sport-type-filter", action="append", metavar="TYPE")
     fetch.add_argument("--limit", type=int, default=0)
@@ -107,6 +112,10 @@ def main(argv: list[str] | None = None) -> int:
     psync.add_argument("--refresh", action="store_true",
                        help="re-scan activities already in the photo index")
     pho.add_parser("list", help="show what media is indexed")
+
+    # -- usage --------------------------------------------------------------
+    use = sub.add_parser("usage", help="how many requests have been spent")
+    use.set_defaults(command="show")
 
     # -- explore ------------------------------------------------------------
     exp = sub.add_parser("explore", help="build the local ride browser")
@@ -166,6 +175,7 @@ def _auth_check(args, store: Store) -> int:
     print(f"session OK -- athlete {athlete}, {total} activities visible")
     if activities:
         print(f"most recent: {_format_activity(activities[0])}")
+    _report_usage(store, client)
     return 0
 
 
@@ -173,22 +183,60 @@ def _auth_check(args, store: Store) -> int:
 
 
 def _activities_sync(args, store: Store) -> int:
+    """Page the activity list, stopping once it reaches rides already indexed.
+
+    Strava returns activities newest first, so a page containing nothing new
+    means everything past it is already held. Stopping there turns a repeat sync
+    from a full walk of the history into one or two requests -- which matters
+    because the rate budget is per application and shared with everything else
+    turkart does.
+    """
     client = StravaClient(BrowserSession.load())
+    known = set(store.load_activities())
     fetched: dict[str, dict] = {}
-    for activity in client.iter_activities(
-        sport_type=args.sport_type or None,
-        keywords=args.keywords,
-        tags=args.tags,
-        per_page=args.per_page,
-        max_pages=args.pages,
-    ):
-        fetched[str(activity.id)] = activity.raw
-        print(f"\r  {len(fetched)} activities...", end="", file=sys.stderr, flush=True)
+    stopped_early = False
+
+    for page in range(1, args.pages + 1):
+        activities, total = client.training_activities(
+            sport_type=args.sport_type or None,
+            keywords=args.keywords,
+            tags=args.tags,
+            page=page,
+            per_page=args.per_page,
+        )
+        if not activities:
+            break
+
+        new_here = 0
+        for activity in activities:
+            key = str(activity.id)
+            if key not in known and key not in fetched:
+                new_here += 1
+            fetched[key] = activity.raw
+        print(f"\r  page {page}: {len(fetched)} seen, {new_here} new...",
+              end="", file=sys.stderr, flush=True)
+
+        # A whole page of already-known rides means the rest is older still.
+        if not args.full and known and new_here == 0:
+            stopped_early = True
+            break
+        if len(fetched) >= total:
+            break
     print(file=sys.stderr)
 
     added, updated = store.merge_activities(fetched)
     print(f"fetched {len(fetched)} ({added} new, {updated} changed) -> {store.activities_file}")
+    if stopped_early:
+        print("stopped early: reached activities already indexed (--full to walk them all)")
+    _report_usage(store, client)
     return 0
+
+
+def _report_usage(store: Store, client) -> None:
+    from . import usage
+
+    usage.record(store, client.requests)
+    print(usage.report(store, client.requests))
 
 
 def _activities_list(args, store: Store) -> int:
@@ -214,8 +262,13 @@ def _activities_list(args, store: Store) -> int:
 
 
 def _streams_fetch(args, store: Store) -> int:
-    if args.ids:
-        targets = [{"id": i} for i in args.ids]
+    if args.selection:
+        ids = _expand_members(store, _read_selection(args.selection))
+        known = store.load_activities()
+        targets = [known.get(str(i), {"id": i}) for i in ids]
+        print(f"{len(targets)} activities from {args.selection}")
+    elif args.ids:
+        targets = [{"id": i} for i in _expand_members(store, args.ids)]
     else:
         targets = _select_activities(store, args)
 
@@ -252,6 +305,7 @@ def _streams_fetch(args, store: Store) -> int:
         print(f"  [{index}/{len(pending)}] {activity_id} {label} -- {points} points")
 
     print(f"done: {len(pending) - failures} saved, {failures} failed")
+    _report_usage(store, client)
     return 1 if failures else 0
 
 
@@ -472,10 +526,14 @@ def _photos_sync(args, store: Store) -> int:
         print(f"roughly {len(pending) * avg_mb:.0f} MB to download "
               f"(at the {avg_mb:.2f} MB average of what is already here)")
         print("\nre-run without --scan-only to fetch them")
+        if client:
+            _report_usage(store, client)
         return 0
 
     if not pending:
         print(f"\nnothing to download -- every photo for these rides is already on disk")
+        if client:
+            _report_usage(store, client)
         return 0
 
     print(f"\ndownloading {len(pending)} photo(s)")
@@ -497,6 +555,7 @@ def _photos_sync(args, store: Store) -> int:
             print(f"  {n}/{len(pending)}")
 
     print(f"\n{saved} photo(s) downloaded, {failures} failed, {videos} video(s) skipped")
+    _report_usage(store, client)
     return 1 if failures else 0
 
 
@@ -533,6 +592,29 @@ def _photos_list(args, store: Store) -> int:
         kinds = f"{sum(1 for i in items if not i['is_video'])} photo, {sum(1 for i in items if i['is_video'])} video"
         print(f"  {activity_id}  {kinds:20s} {on_disk} on disk  {name[:40]}")
     print(f"\n{len(withmedia)} of {len(index)} scanned activities have media")
+    return 0
+
+
+# -------------------------------------------------------------------- usage
+
+
+def _usage_show(args, store: Store) -> int:
+    from . import usage
+
+    tally = usage.load(store)
+    if not tally:
+        print("no requests recorded yet")
+        return 0
+    for day in sorted(tally):
+        n = tally[day]
+        bar = "#" * min(40, round(n / usage.DAILY_BUDGET * 40))
+        print(f"  {day}  {n:5d}  {bar}")
+    print()
+    print(usage.report(store, 0))
+    print(f"\nStrava's non-upload budget is {usage.QUARTER_HOUR_BUDGET}/15min and "
+          f"{usage.DAILY_BUDGET}/day, per application.")
+    print("These endpoints send no rate-limit headers, so this tally is our own count,")
+    print("and it only sees requests made through turkart.")
     return 0
 
 
@@ -729,6 +811,7 @@ _HANDLERS = {
     ("merge", "apply"): _merge_apply,
     ("merge", "list"): _merge_list,
     ("merge", "remove"): _merge_remove,
+    ("usage", "show"): _usage_show,
     ("photos", "sync"): _photos_sync,
     ("photos", "list"): _photos_list,
     ("explore", "build"): _explore_build,

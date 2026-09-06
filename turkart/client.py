@@ -67,6 +67,10 @@ class StravaClient:
         self._http = session.build()
         self._min_interval = min_interval
         self._last_request = 0.0
+        # Nothing in the responses reports rate-limit state -- the internal
+        # endpoints send no X-RateLimit headers -- so counting here is the only
+        # way to know what a run cost.
+        self.requests = 0
         # Strava's activity search ties a page sequence to a session id; reusing
         # one across pages keeps pagination stable while we walk a result set.
         self._search_session_id = str(uuid.uuid4())
@@ -82,6 +86,7 @@ class StravaClient:
         url = path if path.startswith("http") else f"{BASE}{path}"
         response = self._http.get(url, params=params, timeout=30, **kwargs)
         self._last_request = time.monotonic()
+        self.requests += 1
 
         if response.status_code in (401, 403):
             raise SessionError(

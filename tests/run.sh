@@ -27,6 +27,9 @@ SEED=$(mktemp -t seed).js
 printf 'localStorage.setItem(\"strava-poster-v2\", JSON.stringify({active:\"S\",sets:{S:{ids:[%s],photos:{},leaders:true,size:72}}}));\n' "$IDS" > "$SEED"
 cat tests/harness.js "$SEED" "$PAGE" | node - && echo '  no crash'
 
+echo '--- request tally ---'
+.venv/bin/python tests/usage_test.py
+
 echo '--- features ---'
 cat tests/harness.js "$PAGE" tests/features.js | node -
 rm -f "$PAGE" "$SEED"

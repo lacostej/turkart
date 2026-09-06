@@ -18,6 +18,7 @@ from .client import DEFAULT_STREAM_TYPES, StravaClient, StravaError
 from .photos import Media, download, fetch_media, load_index, photo_dir, save_index
 from .session import BrowserSession, SessionError
 from .store import Store
+from . import usage
 
 # One request is one person clicking a button, so keep the work bounded.
 MAX_IDS_PER_CALL = 40
@@ -40,6 +41,17 @@ def expand_members(store: Store, ids: list[int]) -> list[int]:
     return out
 
 
+def _account(store: Store, client: StravaClient | None) -> int:
+    """Fold a client's request count into the shared daily tally.
+
+    Fetches driven from the page spend the same per-application budget as the
+    CLI's, so they have to be counted in the same place or the total is wrong.
+    """
+    made = client.requests if client else 0
+    usage.record(store, made)
+    return made
+
+
 def sync_photos(store: Store, ids: list[int]) -> dict[str, Any]:
     """Scan and download media for specific activities.
 
@@ -51,7 +63,8 @@ def sync_photos(store: Store, ids: list[int]) -> dict[str, Any]:
 
     members = expand_members(store, ids)[:MAX_IDS_PER_CALL]
     if not members:
-        return {"ok": True, "scanned": 0, "downloaded": 0, "failed": 0, "rides": {}}
+        return {"ok": True, "scanned": 0, "downloaded": 0, "failed": 0,
+                "requests": 0, "usedToday": usage.today(store), "rides": {}}
 
     index = load_index(store)
     client: StravaClient | None = None
@@ -106,9 +119,12 @@ def sync_photos(store: Store, ids: list[int]) -> dict[str, Any]:
     for ride_id in ids:
         rides[str(ride_id)] = photo_records(store, expand_members(store, [ride_id]), fresh)
 
+    made = _account(store, client)
     return {
         "ok": True, "scanned": scanned, "downloaded": downloaded,
-        "failed": failed, "videos": videos, "rides": rides,
+        "failed": failed, "videos": videos,
+        "requests": made, "usedToday": usage.today(store),
+        "rides": rides,
     }
 
 
@@ -125,6 +141,7 @@ def sync_streams(store: Store, ids: list[int], tolerance_m: float = 8.0) -> dict
     members = expand_members(store, ids)[:MAX_IDS_PER_CALL]
     wanted = [m for m in members if not store.has_streams(m)]
 
+    client: StravaClient | None = None
     fetched = failed = 0
     empty: list[int] = []
     if wanted:
@@ -147,8 +164,11 @@ def sync_streams(store: Store, ids: list[int], tolerance_m: float = 8.0) -> dict
             fetched += 1
 
     rides = build_rides(store, tolerance_m=tolerance_m, only_ids=set(members) | set(ids))
+    # Fetches driven from the page count against the same budget as the CLI's.
+    made = _account(store, client)
     return {
         "ok": True, "fetched": fetched, "failed": failed, "empty": len(empty),
+        "requests": made, "usedToday": usage.today(store),
         "rides": {str(r["id"]): r for r in rides},
     }
 

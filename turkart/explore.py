@@ -673,7 +673,7 @@ async function fetchTracksFor(ids, label, selectAfter) {
     }
     setFetchNote(`fetched ${data.fetched} track(s)` +
       (data.empty ? `, ${data.empty} had no GPS` : '') +
-      (data.failed ? `, ${data.failed} failed` : ''));
+      (data.failed ? `, ${data.failed} failed` : '') + costOf(data));
   } catch (err) {
     setFetchNote(String(err.message || err), true);
   } finally {
@@ -707,13 +707,21 @@ async function fetchPhotosFor(ids, label) {
     }
     setFetchNote(`fetched ${data.downloaded} photo(s)` +
       (data.videos ? `, skipped ${data.videos} video(s)` : '') +
-      (added === 0 && data.downloaded === 0 ? ' — these rides have none' : ''));
+      (added === 0 && data.downloaded === 0 ? ' — these rides have none' : '') +
+      costOf(data));
   } catch (err) {
     setFetchNote(String(err.message || err), true);
   } finally {
     wanted.forEach(id => fetching.delete(id));
     render();
   }
+}
+
+// Strava's budget is per application and its endpoints report nothing about it,
+// so the only way anyone sees the cost of a fetch is if we say so.
+function costOf(data) {
+  if (!data || !data.requests) return '';
+  return ` · ${data.requests} request(s), ${data.usedToday} today`;
 }
 
 function setFetchNote(text, bad) {

@@ -41,6 +41,7 @@ hint it prints can look stale while the session is fine.
 ```bash
 python -m turkart activities sync --sport-type Ride   # ride summaries
 python -m turkart streams fetch                       # optional: all GPS tracks
+python -m turkart usage                               # what it has cost so far
 ```
 
 Paced at ~1 request/second, so a few hundred rides takes a couple of minutes.
@@ -147,6 +148,32 @@ four index-aligned arrays, so `latlng[i]` and `altitude[i]` are the same instant
 Fetching is the only step that needs credentials; every later step is offline.
 
 Fetches are paced at ~1 req/sec. Rides with `has_latlng: false` are skipped.
+
+### Requests and rate limits
+
+Strava's limits are **per application**, not per athlete: 100 requests / 15 min
+and **1,000 / day** for non-upload calls, which is all turkart makes. The
+internal endpoints return **no `X-RateLimit-*` headers** — those exist only on
+the official API — so nothing tells us what is left. turkart counts its own
+requests instead, in `data/usage.json`, and every fetching command reports what
+it spent:
+
+```
+1 request(s) this run; 2 today, ~998 left of Strava's 1000/day non-upload budget
+```
+
+`turkart usage` shows the running tally. It is advisory, not enforced, and it
+only sees requests made through turkart.
+
+Fetching is lazy by design, because that budget is easy to burn:
+
+- `activities sync` **stops at the first page of rides it already has**. Strava
+  returns newest first, so a page with nothing new means the rest is older still.
+  A repeat sync costs **1 request instead of 5**. `--full` walks everything.
+- Tracks and photos are fetched **only for the rides you pick**, from the editor
+  or with `--selection`. A full history sync is one request *per activity* —
+  ~128 for this account, against a 1,000/day budget shared with everything else.
+- Nothing is ever re-fetched: anything already on disk is skipped.
 
 ### Repair split recordings
 
