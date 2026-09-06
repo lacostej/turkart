@@ -338,6 +338,11 @@ _TEMPLATE = r"""<!doctype html>
   /* In legend mode the map is the artwork, so the chrome gets out of the way.
      Attribution stays: OSM and CARTO both require it, and a screenshot without
      it is not licensed for sharing. */
+  /* The map now runs full width underneath the floating sidebar, so Leaflet's
+     top-left controls (zoom) would sit behind it. Shift them clear while the
+     sidebar is showing, and let them return to the window edge without it. */
+  .leaflet-top.leaflet-left { transition:margin-left .12s ease; }
+  body:not(.legendmode) .leaflet-top.leaflet-left { margin-left:440px; }
   body.legendmode .leaflet-control-zoom,
   body.legendmode .leaflet-control-layers,
   body.legendmode #legendbar {
