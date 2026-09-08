@@ -304,10 +304,19 @@ _TEMPLATE = r"""<!doctype html>
                    border-radius:4px; font:inherit; background:#fff; }
   .filters label { grid-column:span 2; font-size:11px; color:var(--muted);
                    text-transform:uppercase; letter-spacing:.05em; margin-top:4px; }
-  .toggles { grid-column:span 2; display:flex; gap:14px; }
-  .tog { display:flex; align-items:center; gap:5px; font-size:12px; color:var(--ink);
-         text-transform:none; letter-spacing:0; margin:0; cursor:pointer; }
-  .tog input { margin:0; }
+  .toggles { grid-column:span 2; display:flex; flex-wrap:wrap; gap:6px 14px; }
+  /* `.filters label` is (0,1,1) and out-specifies a bare `.tog` at (0,1,0), so
+     these have to be qualified or they inherit the uppercase, 11px, letter-spaced
+     treatment meant for the section headings -- which is what made them wrap into
+     stacked fragments. nowrap keeps a label whole; the container wraps instead. */
+  .filters .tog { display:flex; align-items:center; gap:5px; margin:0; cursor:pointer;
+                  font-size:12px; color:var(--ink); text-transform:none;
+                  letter-spacing:0; white-space:nowrap; }
+  /* `.filters input` sets width:100% for the text and date fields, which also
+     hit these checkboxes and stretched each one across its whole label -- the
+     text then rendered on top of it. That, not the type scale, is what made the
+     row look broken. */
+  .filters .tog input { width:auto; margin:0; flex:none; }
   .kid { font-size:10px; font-weight:700; color:#7a4a1e; background:#ffe8cf;
          border-radius:3px; padding:0 4px; margin-left:5px; vertical-align:1px; }
   .btnrow { display:flex; gap:6px; flex-wrap:wrap; padding:9px 16px; border-bottom:1px solid var(--line); }

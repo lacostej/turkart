@@ -48,6 +48,13 @@ the day it was added.
 Of the eleven defects the user reported, a screenshot after each UI change would
 plausibly have caught seven or eight before they ever saw them.
 
+It went further than that. Fixing the wrapped checkboxes from CSS reasoning alone
+produced a *different* broken layout — the checkbox stretched across its own
+label, with the text on top of it. The real cause was `.filters input {
+width:100% }`, meant for the text fields, also hitting the checkboxes. Only the
+second screenshot showed it. Reasoning found a plausible cause; looking found the
+actual one.
+
 > **Rule.** When the natural way to verify something is unavailable, find a
 > substitute *before* building more on top of it. Do not silently downgrade to a
 > weaker proxy and keep going. A declined tool is a gap to close, not a
