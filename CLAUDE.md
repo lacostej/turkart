@@ -1,77 +1,67 @@
 # turkart — working notes
 
-Rules earned by getting them wrong. The reasoning is in `docs/RETROSPECTIVE.md`;
-this is the short version.
+Project-specific only. The general engineering rules live in the global
+`CLAUDE.md`; the reasoning behind both is in `docs/RETROSPECTIVE.md`.
 
 ## Verifying UI changes
 
 Most of this project is a generated web page, and most of its defects have been
-visual. `node --check` and HTTP status codes do not see them.
-
-**After any change to `turkart/explore.py`'s template, look at the page:**
+visual. `node --check` and HTTP status codes do not see them. **The strong check
+here is a screenshot** — take one before saying a UI change works:
 
 ```bash
 .venv/bin/python -m turkart explore --serve 8137 &   # if not already serving
 tests/shot.sh /tmp/shot.png                          # then read the image
+./tests/run.sh                                       # 115 checks
 ```
 
-Then run the suite: `./tests/run.sh`.
+This has already found two defects that CSS reasoning alone got wrong — the
+second only appeared *after* the first "fix".
 
-A screenshot is cheap and has already found a defect that months of status-code
-checks did not. Take one before saying a UI change works.
+## This repo's test harness
 
-## Claims and checks
-
-- **Check the layer the claim is about.** A tile returning `200` is not a tile
-  that renders — CARTO served a watermarked image at `200` with a plausible byte
-  count. A process that started is not a port that bound.
-- **Never pipe a command whose failure matters through `head`/`tail`/`grep`.**
-  SIGPIPE has already hidden a traceback and turned a crash into a reported
-  success.
-- **Measure rather than estimate** when the data is on disk. The per-user API
-  cost was counted, not guessed, and the real number changed the conclusion.
-
-## Tests
-
-- **A regression test must be shown to fail without the fix.** Revert, confirm
-  red, restore. Two tests here passed with their bug reintroduced before this was
-  enforced.
-- **Stubs must model what the real dependency refuses to do**, not just its happy
-  path — what throws, what returns null, which event it actually binds. See
-  `tests/harness.js`: it deliberately throws when projecting before the map has a
-  view, and treats marker drags as `mousedown`, because both hid real bugs.
-- **Async suites in `tests/features.js` are queued and awaited in order.** They
-  share `RIDES`, `state` and the fetch stub; interleaving them produces false
-  results. Await anything you assert on — the fetch helpers de-duplicate
-  in-flight ids and will silently no-op.
-- Keep test infrastructure in `tests/`, never in a scratch directory. A suite was
-  lost that way.
+- `tests/harness.js` deliberately throws when projecting coordinates before the
+  map has a view, and treats marker drags as `mousedown` rather than
+  `pointerdown`. Both model real Leaflet behaviour that hid real bugs; do not
+  "simplify" them back to no-ops.
+- Async suites in `tests/features.js` are queued in `SUITES` and awaited in
+  order. They share `RIDES`, `state` and the fetch stub, so interleaving them
+  produces false results. Await anything you assert on — the fetch helpers
+  de-duplicate in-flight ids and will silently no-op otherwise.
+- Test infrastructure lives in `tests/`, never in a scratch directory. A whole
+  suite was lost hand-copying it in.
 
 ## Strava
 
-- **Do not state Strava's limits, terms or endpoints from memory** — check
-  developers.strava.com at the time of use. Getting this wrong inverted a whole
-  analysis. Nothing may be concluded from an unverified number.
-- Limits are **per application**: 100/15min and **1,000/day** non-upload, which is
-  all turkart makes. The internal endpoints send **no rate-limit headers**, so
-  `turkart usage` is our own count.
+- Limits are **per application**: 100/15min and **1,000/day** non-upload, which
+  is all turkart makes. The internal endpoints send **no rate-limit headers**, so
+  `turkart usage` is our own count. Verify anything else at
+  developers.strava.com rather than recalling it.
 - **Fetch lazily.** Tracks and photos cost one request per activity. Fetch for
-  the rides actually selected, never the whole history.
+  the rides actually selected — from the editor or `--selection` — never the
+  whole history. Say what a bulk fetch will cost before running one.
+- **Build user-facing capability in the editor page first**, with the CLI
+  mirroring it. Filtering, photo fetching and track fetching were each shipped
+  CLI-only and each had to be added to the page afterwards.
 - When first parsing a scraped payload, **dump the full field set and choose
   deliberately**. Photo coordinates were discarded on the first pass and cost a
-  full re-scan.
+  full re-scan of every activity.
 - Heuristics over ride data (merge detection, clustering) get **run against real
-  rides and every match read** before their rationale is written down.
+  rides and every match read** before their rationale is written down. The merge
+  detector's first docstring claimed a property the code did not have.
 
 ## Committing
 
-- Stage by explicit path. Never `git add -A` or `.`.
-- **Scan for secrets before every commit** — there is no automated check:
+- **Scan for secrets before every commit — there is no automated check:**
   ```bash
-  grep -rIn "_strava4_session=\|cb1_\|CloudFront-Signature" <paths being committed>
+  grep -rInE "_strava4_session=[a-z0-9]{16}|cb1_[a-z0-9_]{16}|CloudFront-Signature=[A-Za-z0-9]{16}" \
+       <paths being committed>
   ```
+  The pattern matches *values*, not prefixes, so it does not flag this file for
+  documenting itself. An earlier version did, twice — a check that cries wolf
+  stops being read.
 - `.secrets/`, `data/`, `build/` and `LOCAL/` are ignored and hold cookies, GPS
-  traces, photos and the CARTO key. `build/explore.html` embeds both traces and
-  the key — never commit it.
-- **Read any binary before committing it.** GPS traces are home addresses; a
-  poster from an Oslo ride is a home address in a shareable file.
+  traces, photos and the CARTO key. `build/explore.html` embeds both the traces
+  and the key — never commit it.
+- **Read any binary before committing it.** GPS traces are home addresses: a
+  poster made from an Oslo ride puts one in a shareable file.
