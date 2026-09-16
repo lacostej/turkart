@@ -115,6 +115,10 @@ def _js_unescape(text: str) -> str:
                     continue
                 except ValueError:
                     pass
+            # Any other escape: JavaScript yields the bare character.
+            out.append(nxt)
+            i += 2
+            continue
         out.append(char)
         i += 1
     return "".join(out)

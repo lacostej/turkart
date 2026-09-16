@@ -129,7 +129,12 @@ def main(argv: list[str] | None = None) -> int:
                      help="only rides whose name contains this, accent-insensitively")
     asy.add_argument("--scan-only", action="store_true",
                      help="collect the index but download nothing, and report the size")
-    asy.add_argument("--refresh", action="store_true", help="re-read weeks already collected")
+    asy.add_argument("--refresh", action="store_true", help="re-read every week already collected")
+    asy.add_argument("--recheck", type=int, default=2, metavar="N",
+                     help="always re-read the N most recent weeks even if already "
+                          "collected (default 2). The current week is cached the moment "
+                          "it is first read, so without this a ride added to it later "
+                          "would never be picked up.")
 
     alist = ath.add_parser("list", help="show what has been collected")
     alist.add_argument("--id", type=int, required=True)
@@ -639,7 +644,12 @@ def _athlete_sync(args, store: Store) -> int:
     client = StravaClient(BrowserSession.load())
     data = A.load_collection(store, args.id)
     intervals = A.weeks_back(args.weeks)
-    todo = [w for w in intervals if args.refresh or w not in data["weeks"]]
+    # A week already read is skipped -- except the most recent few. Those are
+    # still accumulating: the current week gets cached on its first read, and a
+    # ride uploaded into it afterwards would otherwise never be seen again.
+    fresh = set(intervals[: max(0, args.recheck)])
+    todo = [w for w in intervals
+            if args.refresh or w not in data["weeks"] or w in fresh]
     empty_run = 0
 
     if todo:
