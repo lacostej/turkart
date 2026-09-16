@@ -86,7 +86,12 @@ class StravaClient:
         url = path if path.startswith("http") else f"{BASE}{path}"
         response = self._http.get(url, params=params, timeout=30, **kwargs)
         self._last_request = time.monotonic()
-        self.requests += 1
+        # Only calls to Strava itself spend the per-application budget. Photo
+        # bytes come from their CDN on a different host, and counting those was
+        # inflating the tally badly: one download run of 186 images read as 186
+        # API requests against a 1,000/day limit it does not touch.
+        if url.startswith(BASE):
+            self.requests += 1
 
         if response.status_code in (401, 403):
             raise SessionError(

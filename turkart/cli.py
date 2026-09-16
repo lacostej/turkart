@@ -113,6 +113,41 @@ def main(argv: list[str] | None = None) -> int:
                        help="re-scan activities already in the photo index")
     pho.add_parser("list", help="show what media is indexed")
 
+    # -- athlete ------------------------------------------------------------
+    ath = sub.add_parser("athlete", help="another athlete's rides and photos").add_subparsers(
+        dest="command", required=True
+    )
+    asy = ath.add_parser("sync", help="walk an athlete's weeks, collecting photos")
+    asy.add_argument("--id", type=int, required=True, help="athlete id, from their profile URL")
+    asy.add_argument("--weeks", type=int, default=12,
+                     help="how many weeks back (default: 12); also the cap for --until-empty")
+    asy.add_argument("--until-empty", type=int, nargs="?", const=10, metavar="N",
+                     help="keep walking back until N consecutive weeks hold no activity "
+                          "at all (default 10), rather than stopping at a fixed count. "
+                          "A fixed count cannot tell a boundary from the end of a history.")
+    asy.add_argument("--match", default=None,
+                     help="only rides whose name contains this, accent-insensitively")
+    asy.add_argument("--scan-only", action="store_true",
+                     help="collect the index but download nothing, and report the size")
+    asy.add_argument("--refresh", action="store_true", help="re-read weeks already collected")
+
+    alist = ath.add_parser("list", help="show what has been collected")
+    alist.add_argument("--id", type=int, required=True)
+    alist.add_argument("--match", default=None)
+
+    aexp = ath.add_parser("export", help="write a self-contained gallery folder")
+    aexp.add_argument("--id", type=int, required=True)
+    aexp.add_argument("--match", default=None)
+    aexp.add_argument("-o", "--output", type=Path, default=None,
+                      help="where to write it (default: galleries/<title>)")
+    aexp.add_argument("--title", default="Gallery",
+                      help="shown as the heading, and names the output folder")
+    aexp.add_argument("--show-location", action="store_true",
+                      help="display the ride's start location under each photo. Off by "
+                           "default: it is where the ride began, not where the picture "
+                           "was taken, and saying otherwise is wrong more often than right")
+    aexp.add_argument("--open", action="store_true", help="open it when done")
+
     # -- usage --------------------------------------------------------------
     use = sub.add_parser("usage", help="how many requests have been spent")
     use.set_defaults(command="show")
@@ -595,6 +630,129 @@ def _photos_list(args, store: Store) -> int:
     return 0
 
 
+# ------------------------------------------------------------------ athlete
+
+
+def _athlete_sync(args, store: Store) -> int:
+    from . import athlete as A
+
+    client = StravaClient(BrowserSession.load())
+    data = A.load_collection(store, args.id)
+    intervals = A.weeks_back(args.weeks)
+    todo = [w for w in intervals if args.refresh or w not in data["weeks"]]
+    empty_run = 0
+
+    if todo:
+        print(f"reading {len(todo)} week(s) of athlete {args.id}"
+              f"{'' if args.refresh else f' ({len(intervals) - len(todo)} already collected)'}")
+    for n, interval in enumerate(todo, 1):
+        try:
+            activities, photos = A.fetch_week(client, args.id, interval)
+        except StravaError as exc:
+            print(f"  {interval}: FAILED {exc}", file=sys.stderr)
+            continue
+        kept = 0
+        for activity in activities:
+            if not A.matches(activity["name"], args.match):
+                continue
+            data["activities"][str(activity["id"])] = activity
+            kept += 1
+        for photo in photos:
+            act = data["activities"].get(str(photo.activity_id))
+            if act is None:          # its ride did not match the filter
+                continue
+            data["photos"][photo.photo_id] = photo.to_dict()
+        data["weeks"][interval] = {"activities": len(activities), "kept": kept}
+
+        # An athlete's history ends where the weeks stop holding anything. A
+        # fixed --weeks cannot distinguish that from its own boundary: twice
+        # here the oldest ride sat exactly on the edge of the window, which
+        # looked like a start date and was not.
+        if args.until_empty:
+            empty_run = 0 if activities else empty_run + 1
+            if empty_run >= args.until_empty:
+                print(f"\r  stopped at {interval}: {empty_run} consecutive empty weeks"
+                      f"{' ' * 20}", file=sys.stderr)
+                break
+        print(f"\r  [{n}/{len(todo)}] {interval}: {len(activities)} rides, {kept} kept,"
+              f" {len(data['photos'])} photos total   ", end="", file=sys.stderr, flush=True)
+    if todo:
+        print(file=sys.stderr)
+    A.save_collection(store, args.id, data)
+
+    pending = [p for p in data["photos"].values()
+               if not A.photo_path(store, args.id, p["photo_id"]).exists()]
+    print(f"{len(data['activities'])} matching ride(s), {len(data['photos'])} photo(s), "
+          f"{len(pending)} not yet downloaded")
+
+    if args.scan_only:
+        avg = _average_photo_mb(store)
+        print(f"roughly {len(pending) * avg:.0f} MB to download "
+              f"(at the {avg:.2f} MB average seen so far)")
+        print("\nre-run without --scan-only to fetch them")
+        _report_usage(store, client)
+        return 0
+
+    saved = failed = 0
+    for n, raw in enumerate(pending, 1):
+        photo = A.AthletePhoto(**raw)
+        try:
+            if A.download_photo(client, photo, store):
+                saved += 1
+        except StravaError as exc:
+            failed += 1
+            print(f"  {photo.photo_id} failed: {exc}", file=sys.stderr)
+        if n % 20 == 0 or n == len(pending):
+            print(f"\r  downloaded {n}/{len(pending)}   ", end="", file=sys.stderr, flush=True)
+    if pending:
+        print(file=sys.stderr)
+    print(f"{saved} photo(s) downloaded, {failed} failed")
+    _report_usage(store, client)
+    return 1 if failed else 0
+
+
+def _athlete_list(args, store: Store) -> int:
+    from . import athlete as A
+
+    data = A.load_collection(store, args.id)
+    rows = [a for a in data["activities"].values() if A.matches(a["name"], args.match)]
+    rows.sort(key=lambda a: a.get("start") or "")
+    by_activity: dict[str, list] = {}
+    for p in data["photos"].values():
+        by_activity.setdefault(str(p["activity_id"]), []).append(p)
+
+    for a in rows:
+        shots = by_activity.get(str(a["id"]), [])
+        on_disk = sum(1 for p in shots
+                      if A.photo_path(store, args.id, p["photo_id"]).exists())
+        print(f"  {str(a.get('start'))[:10]}  {on_disk}/{len(shots)} photo  "
+              f"{str(a.get('location') or '')[:22]:22} {str(a.get('name'))[:40]}")
+    print(f"\n{len(rows)} ride(s), {sum(len(v) for v in by_activity.values())} photo(s), "
+          f"weeks read: {len(data['weeks'])}")
+    return 0
+
+
+def _athlete_export(args, store: Store) -> int:
+    from .gallery import default_output, export
+
+    output = args.output or default_output(args.title)
+    result = export(store, args.id, output, match=args.match, title=args.title,
+                    show_location=args.show_location)
+    if not result.photos:
+        print("nothing to export -- run 'turkart athlete sync' first", file=sys.stderr)
+        return 1
+    print(f"{result.photos} photo(s) -> {result.folder}/")
+    print(f"  {result.thumbs_made} thumbnail(s) generated, {result.bytes / 1e6:.0f} MB total")
+    if result.missing:
+        print(f"  {result.missing} photo(s) had no file on disk and were skipped")
+    print(f"  open {result.folder}/index.html")
+    if args.open:
+        import webbrowser
+
+        webbrowser.open((result.folder / "index.html").resolve().as_uri())
+    return 0
+
+
 # -------------------------------------------------------------------- usage
 
 
@@ -811,6 +969,9 @@ _HANDLERS = {
     ("merge", "apply"): _merge_apply,
     ("merge", "list"): _merge_list,
     ("merge", "remove"): _merge_remove,
+    ("athlete", "sync"): _athlete_sync,
+    ("athlete", "list"): _athlete_list,
+    ("athlete", "export"): _athlete_export,
     ("usage", "show"): _usage_show,
     ("photos", "sync"): _photos_sync,
     ("photos", "list"): _photos_list,

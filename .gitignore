@@ -6,8 +6,11 @@ LOCAL/
 
 # Fetched ride data (large, re-fetchable)
 data/
-# Generated selector page (rebuild with: python -m strava explore)
+# Generated selector page (rebuild with: python -m turkart explore)
 build/
+
+# Exported galleries: hundreds of MB, and other people's photographs.
+galleries/
 
 .venv/
 __pycache__/

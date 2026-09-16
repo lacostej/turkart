@@ -353,6 +353,51 @@ Both are one-way and one-time. Once the page has been loaded once on every
 browser in use, `LEGACY_SETS` / `LEGACY_FLAT` and the migration branch in
 `loadState()` can be deleted outright.
 
+### Another athlete's photos
+
+Someone who rides the same route regularly and photographs the same spot builds
+an archive worth seeing in sequence. `athlete` collects it and exports a standalone
+gallery:
+
+```bash
+# the id is the number in their profile URL, strava.com/athletes/<id>
+python -m turkart athlete sync --id <athlete-id> --match <ride-name> --scan-only
+python -m turkart athlete sync --id <athlete-id> --until-empty --weeks 600 --match <ride-name>
+python -m turkart athlete export --id <athlete-id> --match <ride-name> --title "My Gallery" --open
+```
+
+`--match` is accent-insensitive, so a plain-ASCII term finds an accented ride
+name. `--scan-only` reports how many photos and roughly how many MB before
+anything downloads.
+
+`--until-empty` keeps walking back until N consecutive weeks hold no activity,
+rather than stopping at a fixed `--weeks` count. That distinction matters: a
+fixed count cannot tell the end of a history from its own boundary, and an
+oldest ride sitting exactly on the edge of the window reads as a start date when
+it is nothing of the kind.
+
+This uses a different route from the rest of turkart:
+`/athlete/training_activities` only ever returns *your* rides, so another
+athlete's come from the weekly interval fragment behind their profile —
+`/athletes/<id>/interval?…&interval=YYYYWW&interval_type=week&year_offset=0`.
+That returns a week of activities **and their photos in one request**, which is
+far cheaper than our own path's one request per activity. `year_offset` is not
+optional: without it the endpoint answers `200` with an empty body.
+
+Only what the athlete has shared with you is visible. Their photos arrive with
+**no coordinates** — verified absent from the payload, unlike your own — so the
+collection is organised by date, not place.
+
+The export is a self-contained folder: `index.html`, `data.json`, and an
+`images/` directory with a large copy and a locally generated thumbnail of each
+photo. It lands in `galleries/<title>/`. It needs no server and no network — open the HTML directly. The gallery
+filters by title or date; **Slideshow** cycles through them full-bleed on black
+with the ride title and date beneath. Open `index.html#slideshow` (add
+`#shuffle`, or `#every=7`) to start playing immediately.
+
+> An exported gallery is someone else's photographs, and hundreds of megabytes.
+> `galleries/` is gitignored for both reasons.
+
 ## Privacy
 
 turkart is a local tool. **Nothing you fetch is uploaded anywhere** — no ride,
