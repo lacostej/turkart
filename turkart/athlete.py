@@ -269,12 +269,10 @@ def load_collection(store, athlete_id: int) -> dict[str, Any]:
 
 
 def save_collection(store, athlete_id: int, data: dict[str, Any]):
-    path = collection_path(store, athlete_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False))
-    tmp.replace(path)
-    return path
+    from .store import write_json
+
+    return write_json(collection_path(store, athlete_id), data,
+                      indent=1, ensure_ascii=False)
 
 
 def normalise(text: str) -> str:
@@ -301,12 +299,7 @@ def photo_path(store, athlete_id: int, photo_id: str):
 
 def download_photo(client: StravaClient, photo: AthletePhoto, store):
     """Save one still. Returns the path, or None if it was already there."""
-    dest = photo_path(store, photo.athlete_id, photo.photo_id)
-    if dest.exists() or not photo.url:
+    if not photo.url:
         return None
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    response = client._get(photo.url)
-    tmp = dest.with_suffix(".tmp")
-    tmp.write_bytes(response.content)
-    tmp.replace(dest)
-    return dest
+    dest = photo_path(store, photo.athlete_id, photo.photo_id)
+    return dest if client.download_to(photo.url, dest) else None

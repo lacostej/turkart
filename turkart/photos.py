@@ -143,10 +143,9 @@ def load_index(store: Store) -> dict[str, list[dict[str, Any]]]:
 
 
 def save_index(store: Store, index: dict[str, list[dict[str, Any]]]) -> Path:
-    path = index_path(store)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(index, indent=2))
-    return path
+    from .store import write_json
+
+    return write_json(index_path(store), index, indent=2)
 
 
 def download(client: StravaClient, media: Media, store: Store) -> Path | None:
@@ -154,12 +153,6 @@ def download(client: StravaClient, media: Media, store: Store) -> Path | None:
     if media.url is None or media.is_video:
         return None
     dest = photo_dir(store, media.activity_id) / media.filename
-    if dest.exists():
-        return dest
-    dest.parent.mkdir(parents=True, exist_ok=True)
 
-    response = client._get(media.url)
-    tmp = dest.with_suffix(dest.suffix + ".tmp")
-    tmp.write_bytes(response.content)
-    tmp.replace(dest)
+    client.download_to(media.url, dest)
     return dest

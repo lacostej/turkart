@@ -74,8 +74,21 @@ class Store:
         return sorted(ids)
 
 
-def _write_json(path: Path, payload: Any) -> None:
-    """Write atomically, so an interrupted fetch can't leave truncated JSON."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, separators=(",", ":")))
+def write_json(path: Path, payload: Any, **dumps_kwargs: Any) -> Path:
+    """Write JSON atomically, so an interrupted write cannot leave a truncated
+    file that later parses as absent rather than broken.
+
+    Shared by every index in the project; they had drifted into three
+    implementations, one of which was not atomic at all.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not dumps_kwargs:
+        dumps_kwargs = {"separators": (",", ":")}
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, **dumps_kwargs), encoding="utf-8")
     tmp.replace(path)
+    return path
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    write_json(path, payload)

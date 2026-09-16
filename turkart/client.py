@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import random
 import time
+from pathlib import Path
 import uuid
 from dataclasses import dataclass
 from typing import Any, Iterator
@@ -119,6 +120,21 @@ class StravaClient:
         except ValueError as exc:
             snippet = response.text[:200].replace("\n", " ")
             raise StravaError(f"Expected JSON from {path}, got: {snippet!r}") from exc
+
+    def download_to(self, url: str, dest: "Path") -> bool:
+        """Fetch a URL to a file. False if it was already there.
+
+        Written through a temporary name so an interrupted download cannot leave
+        a truncated image that later looks complete.
+        """
+        if dest.exists():
+            return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        response = self._get(url)
+        tmp = dest.with_name(dest.name + ".tmp")
+        tmp.write_bytes(response.content)
+        tmp.replace(dest)
+        return True
 
     # ---------------------------------------------------------------- identity
 
