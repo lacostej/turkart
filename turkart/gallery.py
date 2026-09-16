@@ -23,6 +23,7 @@ import json
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -111,8 +112,15 @@ def export(
     match: str | None = None,
     title: str = "Gallery",
     show_location: bool = False,
+    after: "date | None" = None,
+    before: "date | None" = None,
 ) -> ExportResult:
     """Write the gallery folder.
+
+    ``after`` and ``before`` bound which photos are written. They are needed
+    because the collection on disk is cumulative and the sync window is not a
+    filter: syncing ten weeks does not shrink an index built from six hundred,
+    so without these an export always emits everything ever collected.
 
     ``show_location`` is off by default because the location on a record is the
     *ride's* -- where it started -- and a photo taken mid-ride is somewhere else
@@ -138,6 +146,11 @@ def export(
     for raw in data["photos"].values():
         activity = activities.get(str(raw["activity_id"]))
         if activity is None:
+            continue
+        taken = raw.get("taken_on")
+        if after and (not taken or taken < after.isoformat()):
+            continue
+        if before and (not taken or taken > before.isoformat()):
             continue
         source = A.photo_path(store, athlete_id, raw["photo_id"])
         if not source.exists():

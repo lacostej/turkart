@@ -147,6 +147,14 @@ def main(argv: list[str] | None = None) -> int:
                       help="where to write it (default: galleries/<title>)")
     aexp.add_argument("--title", default="Gallery",
                       help="shown as the heading, and names the output folder")
+    aexp.add_argument("--after", type=_parse_date, metavar="YYYY-MM-DD",
+                      help="only photos from this date onwards")
+    aexp.add_argument("--before", type=_parse_date, metavar="YYYY-MM-DD",
+                      help="only photos up to this date")
+    aexp.add_argument("--weeks", type=int, metavar="N",
+                      help="only the last N weeks. The collection is cumulative and the "
+                           "sync window does not shrink it, so limiting the export is a "
+                           "separate thing from limiting the fetch.")
     aexp.add_argument("--show-location", action="store_true",
                       help="display the ride's start location under each photo. Off by "
                            "default: it is where the ride began, not where the picture "
@@ -745,13 +753,22 @@ def _athlete_list(args, store: Store) -> int:
 def _athlete_export(args, store: Store) -> int:
     from .gallery import default_output, export
 
+    after = args.after
+    if args.weeks:
+        from datetime import date, timedelta
+
+        cutoff = date.today() - timedelta(weeks=args.weeks)
+        after = max(after, cutoff) if after else cutoff
+
     output = args.output or default_output(args.title)
     result = export(store, args.id, output, match=args.match, title=args.title,
-                    show_location=args.show_location)
+                    show_location=args.show_location, after=after, before=args.before)
     if not result.photos:
         print("nothing to export -- run 'turkart athlete sync' first", file=sys.stderr)
         return 1
-    print(f"{result.photos} photo(s) -> {result.folder}/")
+    window = " ".join(filter(None, [
+        f"from {after}" if after else "", f"to {args.before}" if args.before else ""]))
+    print(f"{result.photos} photo(s){' ' + window if window else ''} -> {result.folder}/")
     print(f"  {result.thumbs_made} thumbnail(s) generated, {result.bytes / 1e6:.0f} MB total")
     if result.missing:
         print(f"  {result.missing} photo(s) had no file on disk and were skipped")
